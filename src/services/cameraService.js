@@ -2,8 +2,19 @@
 class CameraService {
   // Normalizar datos recibidos de la cámara al formato de nuestra base de datos
   normalizeDetectionData(cameraData) {
+    const rawPlate = cameraData?.PlateNumber ?? cameraData?.plateNumber ?? null;
+    let licensePlate = null;
+    if (typeof rawPlate === 'string') {
+      const cleaned = rawPlate.trim().replace(/\s+/g, '').toUpperCase();
+      if (cleaned && cleaned !== 'SINPATENTE' && cleaned !== 'SINPLACA') {
+        licensePlate = cleaned;
+      }
+    } else if (rawPlate != null) {
+      licensePlate = String(rawPlate).trim().replace(/\s+/g, '').toUpperCase() || null;
+    }
+
     return {
-      license_plate: cameraData.PlateNumber || cameraData.plateNumber || null,
+      license_plate: licensePlate,
       vehicle_type: cameraData.VehicleType || cameraData.vehicleType || null,
       vehicle_color: cameraData.VehicleColor || cameraData.vehicleColor || null,
       speed: cameraData.Speed || cameraData.speed || null,
@@ -19,11 +30,10 @@ class CameraService {
 
   // Validar que los datos recibidos sean válidos
   validateDetectionData(data) {
-    // Al menos debe tener placa o tipo de vehículo
-    if (!data.license_plate && !data.vehicle_type) {
+    if (!data?.license_plate) {
       return {
         valid: false,
-        error: 'Datos insuficientes: se requiere al menos placa o tipo de vehículo'
+        error: 'Sin patente'
       };
     }
 

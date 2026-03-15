@@ -14,9 +14,10 @@ router.post('/webhook/detection', async (req, res) => {
     // Validar datos
     const validation = cameraService.validateDetectionData(detectionData);
     if (!validation.valid) {
-      return res.status(400).json({ 
-        success: false, 
-        error: validation.error 
+      return res.status(200).json({
+        success: true,
+        ignored: true,
+        reason: validation.error
       });
     }
 

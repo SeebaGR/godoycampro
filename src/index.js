@@ -224,7 +224,8 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
     const validation = cameraService.validateDetectionData(detectionData);
 
     if (!validation.valid) {
-      console.warn('ISAPI TollgateInfo sin datos mínimos:', validation.error);
+      console.warn('ISAPI TollgateInfo ignorado:', validation.error);
+      return res.status(200).send('OK');
     }
 
     const { data: inserted, error } = await supabase
