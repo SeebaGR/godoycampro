@@ -54,14 +54,21 @@ router.post('/webhook/detection', async (req, res) => {
 // Obtener todas las detecciones (con paginación)
 router.get('/detections', async (req, res) => {
   try {
-    const { page = 1, limit = 50, license_plate, start_date, end_date } = req.query;
+    const rawPage = Array.isArray(req.query.page) ? req.query.page[0] : req.query.page;
+    const rawLimit = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
+    const license_plate = Array.isArray(req.query.license_plate) ? req.query.license_plate[0] : req.query.license_plate;
+    const start_date = Array.isArray(req.query.start_date) ? req.query.start_date[0] : req.query.start_date;
+    const end_date = Array.isArray(req.query.end_date) ? req.query.end_date[0] : req.query.end_date;
+
+    const page = Math.max(1, Number.parseInt(rawPage ?? '1', 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(rawLimit ?? '50', 10) || 50));
     const offset = (page - 1) * limit;
 
     let query = supabase
       .from('vehicle_detections')
-      .select('*', { count: 'exact' })
+      .select('*')
       .order('timestamp', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .range(offset, offset + limit);
 
     // Filtros opcionales
     if (license_plate) {
@@ -74,18 +81,22 @@ router.get('/detections', async (req, res) => {
       query = query.lte('timestamp', end_date);
     }
 
-    const { data, error, count } = await query;
+    const { data, error } = await query;
 
     if (error) throw error;
 
+    const items = Array.isArray(data) ? data : [];
+    const hasMore = items.length > limit;
+    const sliced = hasMore ? items.slice(0, limit) : items;
+
     res.json({
       success: true,
-      data,
+      data: sliced,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total: count,
-        pages: Math.ceil(count / limit)
+        page,
+        limit,
+        hasMore,
+        nextPage: hasMore ? page + 1 : null
       }
     });
 
