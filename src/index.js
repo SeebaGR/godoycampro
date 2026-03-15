@@ -228,6 +228,15 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
       return res.status(200).send('OK');
     }
 
+    const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '15', 10) || 15;
+    if (dedupeSeconds > 0) {
+      const isDup = await cameraService.isRecentDuplicate(supabase, detectionData.license_plate, dedupeSeconds * 1000);
+      if (isDup) {
+        console.warn(`ISAPI TollgateInfo duplicado reciente (<${dedupeSeconds}s):`, detectionData.license_plate);
+        return res.status(200).send('OK');
+      }
+    }
+
     const { data: inserted, error } = await supabase
       .from('vehicle_detections')
       .insert([detectionData])

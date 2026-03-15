@@ -13,6 +13,20 @@ class CameraService {
       licensePlate = String(rawPlate).trim().replace(/\s+/g, '').toUpperCase() || null;
     }
 
+    const rawImageUrl =
+      cameraData?.ImageUrl ??
+      cameraData?.imageUrl ??
+      cameraData?.ImageURL ??
+      cameraData?.imageURL ??
+      cameraData?.ImageURI ??
+      cameraData?.imageURI ??
+      cameraData?.PicUrl ??
+      cameraData?.picUrl ??
+      cameraData?.PicURL ??
+      cameraData?.picURL ??
+      null;
+    const imageUrl = typeof rawImageUrl === 'string' ? (rawImageUrl.trim() || null) : (rawImageUrl != null ? String(rawImageUrl).trim() || null : null);
+
     return {
       license_plate: licensePlate,
       vehicle_type: cameraData.VehicleType || cameraData.vehicleType || null,
@@ -21,7 +35,7 @@ class CameraService {
       direction: cameraData.Direction || cameraData.direction || null,
       confidence: cameraData.Confidence || cameraData.confidence || null,
       timestamp: cameraData.UTC || cameraData.timestamp || new Date().toISOString(),
-      image_url: cameraData.ImageUrl || cameraData.imageUrl || null,
+      image_url: imageUrl,
       camera_id: cameraData.SerialID || cameraData.cameraId || process.env.CAMERA_ID || 'DAHUA-001',
       location: process.env.CAMERA_LOCATION || 'Pantalla Publicitaria',
       raw_data: cameraData // Guardar datos originales por si acaso
@@ -38,6 +52,27 @@ class CameraService {
     }
 
     return { valid: true };
+  }
+
+  async isRecentDuplicate(supabaseClient, licensePlate, windowMs) {
+    if (!supabaseClient || !licensePlate) return false;
+    const ms = Number.isFinite(windowMs) ? windowMs : 15000;
+
+    const { data, error } = await supabaseClient
+      .from('vehicle_detections')
+      .select('id,created_at')
+      .eq('license_plate', licensePlate)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (error) return false;
+    const last = Array.isArray(data) ? data[0] : null;
+    if (!last || !last.created_at) return false;
+
+    const lastMs = Date.parse(last.created_at);
+    if (!Number.isFinite(lastMs)) return false;
+
+    return (Date.now() - lastMs) <= ms;
   }
 
   // Procesar imagen si viene en base64

@@ -6,10 +6,38 @@ const supabase = require('../config/supabase');
 // Endpoint para recibir detecciones desde la cámara DAHUA
 router.post('/webhook/detection', async (req, res) => {
   try {
-    console.log('Detección recibida de la cámara:', JSON.stringify(req.body, null, 2));
+    const logPayload = process.env.LOG_DETECTION_PAYLOAD === '1' || process.env.LOG_DETECTION_PAYLOAD === 'true';
+    const logMax = Number.parseInt(process.env.LOG_DETECTION_PAYLOAD_MAX ?? '8000', 10) || 8000;
+    const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '15', 10) || 15;
+
+    const safeStringify = (value) => {
+      try {
+        const text = JSON.stringify(
+          value,
+          (k, v) => {
+            if (typeof v === 'string' && v.length > 800) return v.slice(0, 800) + '…';
+            return v;
+          },
+          2
+        );
+        return text.length > logMax ? text.slice(0, logMax) + '…' : text;
+      } catch {
+        return '[unserializable]';
+      }
+    };
+
+    if (logPayload) {
+      console.log('Detección recibida de la cámara (raw):', safeStringify(req.body));
+    }
 
     // Normalizar datos
     const detectionData = cameraService.normalizeDetectionData(req.body);
+    console.log('Detección normalizada:', {
+      license_plate: detectionData.license_plate,
+      timestamp: detectionData.timestamp,
+      has_image_url: Boolean(detectionData.image_url),
+      image_url_preview: typeof detectionData.image_url === 'string' ? detectionData.image_url.slice(0, 160) : null
+    });
 
     // Validar datos
     const validation = cameraService.validateDetectionData(detectionData);
@@ -19,6 +47,17 @@ router.post('/webhook/detection', async (req, res) => {
         ignored: true,
         reason: validation.error
       });
+    }
+
+    if (dedupeSeconds > 0) {
+      const isDup = await cameraService.isRecentDuplicate(supabase, detectionData.license_plate, dedupeSeconds * 1000);
+      if (isDup) {
+        return res.status(200).json({
+          success: true,
+          ignored: true,
+          reason: `Duplicado reciente (<${dedupeSeconds}s)`
+        });
+      }
     }
 
     // Guardar en Supabase
