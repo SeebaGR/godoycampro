@@ -60,6 +60,22 @@ router.post('/webhook/detection', async (req, res) => {
       }
     }
 
+    if (!detectionData.image_url) {
+      const base64 = cameraService.extractImageBase64(req.body);
+      if (base64) {
+        const bucket = process.env.SUPABASE_PHOTOS_BUCKET || 'FotosAutos';
+        const publicUrl = await cameraService.uploadImageBase64ToStorage(supabase, bucket, base64, {
+          cameraId: detectionData.camera_id,
+          licensePlate: detectionData.license_plate,
+          timestamp: detectionData.timestamp
+        });
+        if (publicUrl) {
+          detectionData.image_url = publicUrl;
+          console.log('Imagen subida a Storage:', publicUrl.slice(0, 180));
+        }
+      }
+    }
+
     // Guardar en Supabase
     const { data, error } = await supabase
       .from('vehicle_detections')
