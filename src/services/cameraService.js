@@ -52,9 +52,6 @@ class CameraService {
       return { valid: false, error: 'Sin patente' };
     }
 
-    const ok = /^(?:[A-Z]{4}\d{2}|[A-Z]{2}\d{4})$/.test(plate);
-    if (!ok) return { valid: false, error: 'Formato de patente inválido' };
-
     return { valid: true };
   }
 

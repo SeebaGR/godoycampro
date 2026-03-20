@@ -54,23 +54,7 @@ router.post('/webhook/detection', async (req, res) => {
       });
     }
 
-    if (dedupeSeconds > 0 && detectionData.license_plate) {
-      const last = await directus.getLatestByPlate(detectionData.license_plate);
-      const lastMs = last?.date_created ? Date.parse(last.date_created) : Number.NaN;
-      const deltaMs = Number.isFinite(lastMs) ? (Date.now() - lastMs) : Number.NaN;
-      if (Number.isFinite(deltaMs) && deltaMs >= 0 && deltaMs <= (dedupeSeconds * 1000)) {
-        console.warn('Detección ignorada (duplicado):', {
-          license_plate: detectionData.license_plate,
-          delta_seconds: Math.round(deltaMs / 1000),
-          window_seconds: dedupeSeconds
-        });
-        return res.status(200).json({
-          success: true,
-          ignored: true,
-          reason: `Duplicado reciente (<${Math.round(dedupeSeconds / 60)}m)`
-        });
-      }
-    }
+    void dedupeSeconds;
 
     if (!detectionData.image_url) {
       const base64 = cameraService.extractImageBase64(req.body);
