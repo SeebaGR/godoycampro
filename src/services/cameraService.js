@@ -1,6 +1,51 @@
 // Servicio para procesar datos recibidos de la cámara DAHUA
 const crypto = require('crypto');
 class CameraService {
+  toIsoFromDahuaTime(value) {
+    if (typeof value !== 'string') return null;
+    const s = value.trim();
+    if (!s) return null;
+    const m = s.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?$/);
+    if (!m) return null;
+    const date = m[1];
+    const time = m[2];
+    const ms = m[3] ? m[3].padEnd(3, '0') : null;
+    return ms ? `${date}T${time}.${ms}Z` : `${date}T${time}Z`;
+  }
+
+  pickBestTimestamp(cameraData) {
+    const candidates = [
+      cameraData?.UTC,
+      cameraData?.timestamp,
+      cameraData?.Timestamp,
+      cameraData?.__rawObject?.Picture?.SnapInfo?.AccurateTime,
+      cameraData?.__rawObject?.Picture?.SnapInfo?.SnapTime,
+      cameraData?.Picture?.SnapInfo?.AccurateTime,
+      cameraData?.Picture?.SnapInfo?.SnapTime,
+      cameraData?.raw_data?.Picture?.SnapInfo?.AccurateTime,
+      cameraData?.raw_data?.Picture?.SnapInfo?.SnapTime
+    ];
+
+    for (const c of candidates) {
+      if (typeof c !== 'string') continue;
+      const trimmed = c.trim();
+      if (!trimmed) continue;
+      const iso = this.toIsoFromDahuaTime(trimmed) || trimmed;
+      const ms = Date.parse(iso);
+      if (Number.isFinite(ms)) return new Date(ms).toISOString();
+    }
+
+    if (typeof cameraData?.__raw === 'string') {
+      try {
+        const parsed = JSON.parse(cameraData.__raw);
+        const fromRaw = this.pickBestTimestamp(parsed);
+        if (fromRaw) return fromRaw;
+      } catch {
+      }
+    }
+
+    return new Date().toISOString();
+  }
 
   // Normalizar datos recibidos de la cámara al formato de nuestra base de datos
   normalizeDetectionData(cameraData) {
@@ -37,7 +82,7 @@ class CameraService {
       speed: cameraData.Speed || cameraData.speed || null,
       direction: cameraData.Direction || cameraData.direction || null,
       confidence: cameraData.Confidence || cameraData.confidence || null,
-      timestamp: cameraData.UTC || cameraData.timestamp || new Date().toISOString(),
+      timestamp: this.pickBestTimestamp(cameraData),
       image_url: imageUrl,
       camera_id: cameraData.SerialID || cameraData.cameraId || process.env.CAMERA_ID || 'DAHUA-001',
       location: process.env.CAMERA_LOCATION || 'Pantalla Publicitaria',

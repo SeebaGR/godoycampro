@@ -3,6 +3,8 @@ const router = express.Router();
 const cameraService = require('../services/cameraService');
 const directus = require('../config/directus');
 
+const detectionsCache = new Map();
+
 router.get('/assets/:id', async (req, res) => {
   try {
     const { baseUrl, token } = directus.getDirectusConfig();
@@ -87,7 +89,38 @@ router.post('/webhook/detection', async (req, res) => {
       });
     }
 
-    void dedupeSeconds;
+    if (dedupeSeconds > 0 && detectionData.license_plate) {
+      const latest = await directus.getLatestTimestampByPlate(detectionData.license_plate);
+      const lastMs = latest?.timestamp ? Date.parse(latest.timestamp) : Number.NaN;
+      const currentMs = detectionData.timestamp ? Date.parse(detectionData.timestamp) : Number.NaN;
+      if (Number.isFinite(lastMs) && Number.isFinite(currentMs)) {
+        const deltaMs = currentMs - lastMs;
+        if (deltaMs >= 0 && deltaMs <= (dedupeSeconds * 1000)) {
+          console.warn('Detección ignorada (duplicado por placa):', {
+            license_plate: detectionData.license_plate,
+            delta_seconds: Math.round(deltaMs / 1000),
+            window_seconds: dedupeSeconds
+          });
+          return res.status(200).json({
+            success: true,
+            ignored: true,
+            reason: `Duplicado reciente (<${Math.round(dedupeSeconds / 60)}m)`
+          });
+        }
+        if (deltaMs < 0) {
+          console.warn('Detección ignorada (fuera de orden):', {
+            license_plate: detectionData.license_plate,
+            current: detectionData.timestamp,
+            last: latest.timestamp
+          });
+          return res.status(200).json({
+            success: true,
+            ignored: true,
+            reason: 'Evento fuera de orden'
+          });
+        }
+      }
+    }
 
     if (!detectionData.image_url) {
       const base64 = cameraService.extractImageBase64(req.body);
@@ -143,6 +176,23 @@ router.get('/detections', async (req, res) => {
     const start_date = Array.isArray(req.query.start_date) ? req.query.start_date[0] : req.query.start_date;
     const end_date = Array.isArray(req.query.end_date) ? req.query.end_date[0] : req.query.end_date;
 
+    const cacheMs = Number.parseInt(process.env.DETECTIONS_CACHE_MS ?? '2000', 10) || 2000;
+    const minPollMs = Number.parseInt(process.env.DETECTIONS_MIN_POLL_MS ?? '2500', 10) || 2500;
+    const maxPollMs = Number.parseInt(process.env.DETECTIONS_MAX_POLL_MS ?? '20000', 10) || 20000;
+    const basePollMs = Math.min(maxPollMs, Math.max(minPollMs, cacheMs));
+    const cacheKey = JSON.stringify({
+      page: rawPage ?? '1',
+      limit: rawLimit ?? '50',
+      license_plate: license_plate || '',
+      start_date: start_date || '',
+      end_date: end_date || ''
+    });
+    const cached = detectionsCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return res.json(cached.payload);
+    }
+
+    const startedAt = Date.now();
     const result = await directus.listDetections({
       page: rawPage ?? '1',
       limit: rawLimit ?? '50',
@@ -150,14 +200,28 @@ router.get('/detections', async (req, res) => {
       start_date,
       end_date
     });
+    const elapsedMs = Date.now() - startedAt;
+    const pollAfterMs = Math.min(maxPollMs, Math.max(basePollMs, Math.round(elapsedMs * 1.25)));
 
-    res.json({ success: true, data: result.data, pagination: result.pagination });
+    const payload = { success: true, data: result.data, pagination: result.pagination, poll_after_ms: pollAfterMs };
+    if (cacheMs > 0) {
+      detectionsCache.set(cacheKey, { expiresAt: Date.now() + cacheMs, payload });
+    }
+    return res.json(payload);
 
   } catch (error) {
-    console.error('Error obteniendo detecciones:', error);
-    res.status(500).json({ 
+    console.error('Error obteniendo detecciones:', {
+      message: error?.message,
+      status: error?.status,
+      method: error?.method,
+      url: error?.url
+    });
+    const retryAfterMs = Number.parseInt(process.env.DETECTIONS_RETRY_AFTER_MS ?? '5000', 10) || 5000;
+    res.setHeader('Retry-After', String(Math.max(1, Math.round(retryAfterMs / 1000))));
+    res.status(502).json({ 
       success: false, 
-      error: error.message 
+      error: error?.message || 'Error consultando Directus',
+      retry_after_ms: retryAfterMs
     });
   }
 });

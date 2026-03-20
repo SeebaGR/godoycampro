@@ -233,7 +233,30 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
     }
 
     const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '900', 10) || 900;
-    void dedupeSeconds;
+    if (dedupeSeconds > 0 && detectionData.license_plate) {
+      const latest = await directus.getLatestTimestampByPlate(detectionData.license_plate);
+      const lastMs = latest?.timestamp ? Date.parse(latest.timestamp) : Number.NaN;
+      const currentMs = detectionData.timestamp ? Date.parse(detectionData.timestamp) : Number.NaN;
+      if (Number.isFinite(lastMs) && Number.isFinite(currentMs)) {
+        const deltaMs = currentMs - lastMs;
+        if (deltaMs >= 0 && deltaMs <= (dedupeSeconds * 1000)) {
+          console.warn('ISAPI TollgateInfo duplicado por placa:', {
+            license_plate: detectionData.license_plate,
+            delta_seconds: Math.round(deltaMs / 1000),
+            window_seconds: dedupeSeconds
+          });
+          return res.status(200).send('OK');
+        }
+        if (deltaMs < 0) {
+          console.warn('ISAPI TollgateInfo fuera de orden:', {
+            license_plate: detectionData.license_plate,
+            current: detectionData.timestamp,
+            last: latest.timestamp
+          });
+          return res.status(200).send('OK');
+        }
+      }
+    }
 
     if (!detectionData.image_url) {
       const base64 = cameraService.extractImageBase64(enrichedData);
@@ -343,6 +366,19 @@ app.get('/dashboard', (req, res) => {
     const pageLimit = 50;
     let hasMore = false;
     let isRefreshing = false;
+    let pollMs = 2500;
+    let timerId = null;
+
+    function clampPoll(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return pollMs;
+      return Math.max(1500, Math.min(20000, Math.round(n)));
+    }
+
+    function scheduleNext(ms) {
+      if (timerId) clearTimeout(timerId);
+      timerId = setTimeout(refresh, ms);
+    }
 
     function toText(value) {
       if (value === null || value === undefined || value === '') return '—';
@@ -399,7 +435,13 @@ app.get('/dashboard', (req, res) => {
       url.searchParams.set('page', String(currentPage));
       url.searchParams.set('limit', String(pageLimit));
       const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (!res.ok) {
+        const retryAfter = res.headers.get('retry-after');
+        const err = new Error('HTTP ' + res.status);
+        err.status = res.status;
+        err.retryAfterMs = retryAfter ? (Number.parseInt(retryAfter, 10) * 1000) : null;
+        throw err;
+      }
       return res.json();
     }
 
@@ -439,6 +481,7 @@ app.get('/dashboard', (req, res) => {
         }
         const payload = await fetchDetections();
         const items = (payload && payload.data) ? payload.data : [];
+        pollMs = clampPoll(payload && payload.poll_after_ms);
         hasMore = Boolean(payload && payload.pagination && payload.pagination.hasMore);
         pageInfoEl.textContent = 'Página ' + currentPage;
         prevPageBtn.disabled = currentPage <= 1;
@@ -465,8 +508,11 @@ app.get('/dashboard', (req, res) => {
         statusEl.textContent = 'Al día';
       } catch (e) {
         statusEl.textContent = 'Error';
+        const retryAfterMs = e && typeof e.retryAfterMs === 'number' ? e.retryAfterMs : null;
+        pollMs = clampPoll(retryAfterMs || (pollMs * 2));
       } finally {
         isRefreshing = false;
+        scheduleNext(pollMs);
       }
     }
 
@@ -482,7 +528,6 @@ app.get('/dashboard', (req, res) => {
       refresh();
     });
     refresh();
-    setInterval(refresh, 2500);
   </script>
 </body>
 </html>`);

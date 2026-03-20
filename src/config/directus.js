@@ -35,6 +35,21 @@ async function readResponseBody(res) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(url, init, timeoutMs) {
+  const ms = Number.isFinite(timeoutMs) ? timeoutMs : 8000;
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...(init || {}), signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 function getDirectusConfig() {
   const baseUrl =
     normalizeDirectusBaseUrl(process.env.DIRECTUS_URL) ||
@@ -56,29 +71,63 @@ async function directusRequest(method, path, { query, body, headers } = {}) {
   if (!baseUrl) throw new Error('Falta DIRECTUS_URL (o DIRECTUSURL / DIRECTUS_BASE_URL)');
   const url = `${baseUrl}${path}${buildQueryString(query)}`;
 
-  const reqHeaders = { ...(headers || {}) };
+  const reqHeaders = { Accept: 'application/json', ...(headers || {}) };
   if (token) reqHeaders.Authorization = `Bearer ${token}`;
 
   const init = { method, headers: reqHeaders };
   if (body !== undefined) init.body = body;
 
-  const res = await fetch(url, init);
-  const payload = await readResponseBody(res);
+  const timeoutMs = Number.parseInt(process.env.DIRECTUS_TIMEOUT_MS ?? '8000', 10) || 8000;
+  const maxRetries = Number.parseInt(process.env.DIRECTUS_MAX_RETRIES ?? '2', 10) || 2;
+  const retryableStatus = new Set([429, 502, 503, 504]);
 
-  if (!res.ok) {
-    const message =
-      (payload && typeof payload === 'object' && Array.isArray(payload.errors) && payload.errors[0]?.message) ||
-      (payload && typeof payload === 'object' && payload.error) ||
-      (typeof payload === 'string' && payload) ||
-      `HTTP ${res.status}`;
-    throw new Error(message);
+  let lastError = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      const res = await fetchWithTimeout(url, init, timeoutMs);
+      const payload = await readResponseBody(res);
+
+      if (!res.ok) {
+        const message =
+          (payload && typeof payload === 'object' && Array.isArray(payload.errors) && payload.errors[0]?.message) ||
+          (payload && typeof payload === 'object' && payload.error) ||
+          (typeof payload === 'string' && payload) ||
+          `HTTP ${res.status}`;
+
+        const err = new Error(message);
+        err.status = res.status;
+        err.url = url;
+        err.method = method;
+
+        if (retryableStatus.has(res.status) && attempt < maxRetries) {
+          lastError = err;
+          await sleep(250 * (attempt + 1));
+          continue;
+        }
+        throw err;
+      }
+
+      if (payload && typeof payload === 'object' && Array.isArray(payload.errors) && payload.errors.length > 0) {
+        const err = new Error(payload.errors[0]?.message || 'Error de Directus');
+        err.status = res.status;
+        err.url = url;
+        err.method = method;
+        throw err;
+      }
+
+      return payload;
+    } catch (e) {
+      const retryable = (e && (e.name === 'AbortError' || e.code === 'ECONNRESET' || e.code === 'ETIMEDOUT')) || false;
+      if ((retryable || !('status' in (e || {}))) && attempt < maxRetries) {
+        lastError = e;
+        await sleep(250 * (attempt + 1));
+        continue;
+      }
+      throw e;
+    }
   }
 
-  if (payload && typeof payload === 'object' && Array.isArray(payload.errors) && payload.errors.length > 0) {
-    throw new Error(payload.errors[0]?.message || 'Error de Directus');
-  }
-
-  return payload;
+  throw lastError || new Error('Error de Directus');
 }
 
 async function listDetections({ page, limit, license_plate, start_date, end_date } = {}) {
@@ -154,6 +203,19 @@ async function getLatestByPlate(plate) {
   return rows[0] || null;
 }
 
+async function getLatestTimestampByPlate(plate) {
+  const { collection } = getDirectusConfig();
+  const query = {
+    limit: 1,
+    sort: '-timestamp,-id',
+    fields: 'id,timestamp',
+    'filter[license_plate][_eq]': String(plate)
+  };
+  const payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query });
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+  return rows[0] || null;
+}
+
 async function createDetection(data) {
   const { collection } = getDirectusConfig();
   const payload = await directusRequest('POST', `/items/${encodeURIComponent(collection)}`, {
@@ -184,6 +246,7 @@ module.exports = {
   searchByPlate,
   listStatsFields,
   getLatestByPlate,
+  getLatestTimestampByPlate,
   createDetection,
   uploadImageBytes
 };
