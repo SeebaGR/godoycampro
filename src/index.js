@@ -390,6 +390,7 @@ app.get('/dashboard', (req, res) => {
     let isRefreshing = false;
     let pollMs = 2500;
     let timerId = null;
+    const displayTimeZone = ${JSON.stringify(process.env.CAMERA_TIMEZONE || 'America/Santiago')};
 
     function clampPoll(value) {
       const n = Number(value);
@@ -407,11 +408,19 @@ app.get('/dashboard', (req, res) => {
       return String(value);
     }
 
-    function formatDate(value) {
+    function formatDateTime(value) {
       if (!value) return '—';
       const d = new Date(value);
       if (Number.isNaN(d.getTime())) return String(value);
-      return d.toLocaleDateString();
+      return d.toLocaleString('es-CL', {
+        timeZone: displayTimeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      });
     }
 
     function safeHtml(text) {
@@ -431,7 +440,7 @@ app.get('/dashboard', (req, res) => {
       }
       const canShowImg = typeof imgUrl === 'string' && (imgUrl.startsWith('http') || imgUrl.startsWith('data:image'));
       const fields = [
-        ['Fecha', formatDate(item.timestamp)],
+        ['Fecha', formatDateTime(item.timestamp)],
         ['Tipo', toText(item.vehicle_type)],
         ['Color', toText(item.vehicle_color)],
         ['Velocidad', toText(item.speed)],

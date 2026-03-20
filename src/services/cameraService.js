@@ -1,7 +1,7 @@
 // Servicio para procesar datos recibidos de la cámara DAHUA
 const crypto = require('crypto');
 class CameraService {
-  toIsoFromDahuaTime(value) {
+  parseDahuaDateTime(value) {
     if (typeof value !== 'string') return null;
     const s = value.trim();
     if (!s) return null;
@@ -9,8 +9,56 @@ class CameraService {
     if (!m) return null;
     const date = m[1];
     const time = m[2];
-    const ms = m[3] ? m[3].padEnd(3, '0') : null;
-    return ms ? `${date}T${time}.${ms}Z` : `${date}T${time}Z`;
+    const ms = m[3] ? Number.parseInt(m[3].padEnd(3, '0'), 10) : 0;
+    const [year, month, day] = date.split('-').map(n => Number.parseInt(n, 10));
+    const [hour, minute, second] = time.split(':').map(n => Number.parseInt(n, 10));
+    if (![year, month, day, hour, minute, second].every(Number.isFinite)) return null;
+    return { year, month, day, hour, minute, second, ms };
+  }
+
+  getTimeZone() {
+    const tz = typeof process.env.CAMERA_TIMEZONE === 'string' ? process.env.CAMERA_TIMEZONE.trim() : '';
+    return tz || 'America/Santiago';
+  }
+
+  getPartsInTimeZone(utcMs, timeZone) {
+    const dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+    const parts = dtf.formatToParts(new Date(utcMs));
+    const out = {};
+    for (const p of parts) {
+      if (p.type === 'year') out.year = Number.parseInt(p.value, 10);
+      if (p.type === 'month') out.month = Number.parseInt(p.value, 10);
+      if (p.type === 'day') out.day = Number.parseInt(p.value, 10);
+      if (p.type === 'hour') out.hour = Number.parseInt(p.value, 10);
+      if (p.type === 'minute') out.minute = Number.parseInt(p.value, 10);
+      if (p.type === 'second') out.second = Number.parseInt(p.value, 10);
+    }
+    if (![out.year, out.month, out.day, out.hour, out.minute, out.second].every(Number.isFinite)) return null;
+    return out;
+  }
+
+  zonedLocalToUtcMs(local, timeZone) {
+    if (!local) return Number.NaN;
+    let guess = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second, local.ms || 0);
+    for (let i = 0; i < 3; i += 1) {
+      const parts = this.getPartsInTimeZone(guess, timeZone);
+      if (!parts) break;
+      const desiredLocalUtc = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second, local.ms || 0);
+      const actualLocalUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second, local.ms || 0);
+      const delta = desiredLocalUtc - actualLocalUtc;
+      if (!Number.isFinite(delta) || delta === 0) break;
+      guess += delta;
+    }
+    return guess;
   }
 
   pickBestTimestamp(cameraData) {
@@ -30,8 +78,14 @@ class CameraService {
       if (typeof c !== 'string') continue;
       const trimmed = c.trim();
       if (!trimmed) continue;
-      const iso = this.toIsoFromDahuaTime(trimmed) || trimmed;
-      const ms = Date.parse(iso);
+
+      const dahua = this.parseDahuaDateTime(trimmed);
+      if (dahua) {
+        const utcMs = this.zonedLocalToUtcMs(dahua, this.getTimeZone());
+        if (Number.isFinite(utcMs)) return new Date(utcMs).toISOString();
+      }
+
+      const ms = Date.parse(trimmed);
       if (Number.isFinite(ms)) return new Date(ms).toISOString();
     }
 
