@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const cameraService = require('../services/cameraService');
-const supabase = require('../config/supabase');
+const directus = require('../config/directus');
 
 // Endpoint para recibir detecciones desde la cámara DAHUA
 router.post('/webhook/detection', async (req, res) => {
@@ -50,52 +50,49 @@ router.post('/webhook/detection', async (req, res) => {
     }
 
     if (dedupeSeconds > 0 && detectionData.license_plate) {
-      const isDup = await cameraService.isRecentDuplicate(supabase, detectionData.license_plate, dedupeSeconds * 1000);
-      if (isDup) {
-        return res.status(200).json({
-          success: true,
-          ignored: true,
-          reason: `Duplicado reciente (<${Math.round(dedupeSeconds / 60)}m)`
-        });
+      const last = await directus.getLatestByPlate(detectionData.license_plate);
+      if (last?.created_at) {
+        const lastMs = Date.parse(last.created_at);
+        if (Number.isFinite(lastMs) && (Date.now() - lastMs) <= (dedupeSeconds * 1000)) {
+          return res.status(200).json({
+            success: true,
+            ignored: true,
+            reason: `Duplicado reciente (<${Math.round(dedupeSeconds / 60)}m)`
+          });
+        }
       }
     }
 
     if (!detectionData.image_url) {
       const base64 = cameraService.extractImageBase64(req.body);
       if (base64) {
-        const bucket = process.env.SUPABASE_PHOTOS_BUCKET || 'FotosAutos';
-        const publicUrl = await cameraService.uploadImageBase64ToStorage(supabase, bucket, base64, {
-          cameraId: detectionData.camera_id,
-          licensePlate: detectionData.license_plate,
-          timestamp: detectionData.timestamp
-        });
-        if (publicUrl) {
-          detectionData.image_url = publicUrl;
-          console.log('Imagen subida a Storage:', publicUrl.slice(0, 180));
+        let bytes;
+        try {
+          bytes = Buffer.from(base64, 'base64');
+        } catch {
+          bytes = null;
+        }
+        if (bytes) {
+          const publicUrl = await directus.uploadImageBytes(bytes, {
+            contentType: 'image/jpeg',
+            filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
+            title: `${detectionData.license_plate || 'unknown'}`
+          });
+          if (publicUrl) {
+            detectionData.image_url = publicUrl;
+            console.log('Imagen subida a Directus:', publicUrl.slice(0, 180));
+          }
         }
       }
     }
 
-    // Guardar en Supabase
-    const { data, error } = await supabase
-      .from('vehicle_detections')
-      .insert([detectionData])
-      .select();
-
-    if (error) {
-      console.error('❌ Error guardando en Supabase:', error);
-      return res.status(500).json({ 
-        success: false, 
-        error: error.message 
-      });
-    }
-
-    console.log('Detección guardada exitosamente:', data[0].id);
+    const inserted = await directus.createDetection(detectionData);
+    console.log('Detección guardada exitosamente:', inserted?.id);
 
     res.json({ 
       success: true, 
       message: 'Detección guardada correctamente',
-      id: data[0].id 
+      id: inserted?.id || null
     });
 
   } catch (error) {
@@ -116,45 +113,15 @@ router.get('/detections', async (req, res) => {
     const start_date = Array.isArray(req.query.start_date) ? req.query.start_date[0] : req.query.start_date;
     const end_date = Array.isArray(req.query.end_date) ? req.query.end_date[0] : req.query.end_date;
 
-    const page = Math.max(1, Number.parseInt(rawPage ?? '1', 10) || 1);
-    const limit = Math.min(100, Math.max(1, Number.parseInt(rawLimit ?? '50', 10) || 50));
-    const offset = (page - 1) * limit;
-
-    let query = supabase
-      .from('vehicle_detections')
-      .select('*')
-      .order('timestamp', { ascending: false })
-      .range(offset, offset + limit);
-
-    // Filtros opcionales
-    if (license_plate) {
-      query = query.ilike('license_plate', `%${license_plate}%`);
-    }
-    if (start_date) {
-      query = query.gte('timestamp', start_date);
-    }
-    if (end_date) {
-      query = query.lte('timestamp', end_date);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-
-    const items = Array.isArray(data) ? data : [];
-    const hasMore = items.length > limit;
-    const sliced = hasMore ? items.slice(0, limit) : items;
-
-    res.json({
-      success: true,
-      data: sliced,
-      pagination: {
-        page,
-        limit,
-        hasMore,
-        nextPage: hasMore ? page + 1 : null
-      }
+    const result = await directus.listDetections({
+      page: rawPage ?? '1',
+      limit: rawLimit ?? '50',
+      license_plate,
+      start_date,
+      end_date
     });
+
+    res.json({ success: true, data: result.data, pagination: result.pagination });
 
   } catch (error) {
     console.error('Error obteniendo detecciones:', error);
@@ -168,14 +135,7 @@ router.get('/detections', async (req, res) => {
 // Obtener detección por ID
 router.get('/detections/:id', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('vehicle_detections')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
-
-    if (error) throw error;
-
+    const data = await directus.getDetectionById(req.params.id);
     if (!data) {
       return res.status(404).json({ 
         success: false, 
@@ -198,17 +158,7 @@ router.get('/detections/:id', async (req, res) => {
 router.get('/stats', async (req, res) => {
   try {
     const { start_date, end_date } = req.query;
-
-    let query = supabase
-      .from('vehicle_detections')
-      .select('vehicle_type, vehicle_color, direction');
-
-    if (start_date) query = query.gte('timestamp', start_date);
-    if (end_date) query = query.lte('timestamp', end_date);
-
-    const { data, error } = await query;
-
-    if (error) throw error;
+    const data = await directus.listStatsFields({ start_date, end_date });
 
     // Calcular estadísticas
     const stats = {
@@ -250,13 +200,7 @@ router.get('/stats', async (req, res) => {
 // Buscar por placa
 router.get('/search/plate/:plate', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('vehicle_detections')
-      .select('*')
-      .ilike('license_plate', `%${req.params.plate}%`)
-      .order('timestamp', { ascending: false });
-
-    if (error) throw error;
+    const data = await directus.searchByPlate(req.params.plate);
 
     res.json({ 
       success: true, 

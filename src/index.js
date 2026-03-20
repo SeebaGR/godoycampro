@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const detectionRoutes = require('./routes/detectionRoutes');
 const cameraService = require('./services/cameraService');
-const supabase = require('./config/supabase');
+const directus = require('./config/directus');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -230,40 +230,41 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
 
     const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '900', 10) || 900;
     if (dedupeSeconds > 0 && detectionData.license_plate) {
-      const isDup = await cameraService.isRecentDuplicate(supabase, detectionData.license_plate, dedupeSeconds * 1000);
-      if (isDup) {
-        console.warn(`ISAPI TollgateInfo duplicado reciente (<${Math.round(dedupeSeconds / 60)}m):`, detectionData.license_plate);
-        return res.status(200).send('OK');
+      const last = await directus.getLatestByPlate(detectionData.license_plate);
+      if (last?.created_at) {
+        const lastMs = Date.parse(last.created_at);
+        if (Number.isFinite(lastMs) && (Date.now() - lastMs) <= (dedupeSeconds * 1000)) {
+          console.warn(`ISAPI TollgateInfo duplicado reciente (<${Math.round(dedupeSeconds / 60)}m):`, detectionData.license_plate);
+          return res.status(200).send('OK');
+        }
       }
     }
 
     if (!detectionData.image_url) {
       const base64 = cameraService.extractImageBase64(enrichedData);
       if (base64) {
-        const bucket = process.env.SUPABASE_PHOTOS_BUCKET || 'FotosAutos';
-        const publicUrl = await cameraService.uploadImageBase64ToStorage(supabase, bucket, base64, {
-          cameraId: detectionData.camera_id,
-          licensePlate: detectionData.license_plate,
-          timestamp: detectionData.timestamp
-        });
-        if (publicUrl) {
-          detectionData.image_url = publicUrl;
-          console.log('Imagen ISAPI subida a Storage:', publicUrl.slice(0, 180));
+        let bytes;
+        try {
+          bytes = Buffer.from(base64, 'base64');
+        } catch {
+          bytes = null;
+        }
+        if (bytes) {
+          const publicUrl = await directus.uploadImageBytes(bytes, {
+            contentType: 'image/jpeg',
+            filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
+            title: `${detectionData.license_plate || 'unknown'}`
+          });
+          if (publicUrl) {
+            detectionData.image_url = publicUrl;
+            console.log('Imagen ISAPI subida a Directus:', publicUrl.slice(0, 180));
+          }
         }
       }
     }
 
-    const { data: inserted, error } = await supabase
-      .from('vehicle_detections')
-      .insert([detectionData])
-      .select();
-
-    if (error) {
-      console.error('❌ Error guardando ISAPI TollgateInfo en Supabase:', error);
-      return res.status(200).send('OK');
-    }
-
-    console.log('ISAPI TollgateInfo guardado exitosamente:', inserted?.[0]?.id);
+    const inserted = await directus.createDetection(detectionData);
+    console.log('ISAPI TollgateInfo guardado exitosamente:', inserted?.id);
     return res.status(200).send('OK');
   } catch (error) {
     console.error('❌ Error procesando ISAPI TollgateInfo:', error);
