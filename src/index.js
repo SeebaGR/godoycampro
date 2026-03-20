@@ -342,6 +342,7 @@ app.get('/dashboard', (req, res) => {
     let currentPage = 1;
     const pageLimit = 50;
     let hasMore = false;
+    let isRefreshing = false;
 
     function toText(value) {
       if (value === null || value === undefined || value === '') return '—';
@@ -422,6 +423,8 @@ app.get('/dashboard', (req, res) => {
     }
 
     async function refresh() {
+      if (isRefreshing) return;
+      isRefreshing = true;
       try {
         statusEl.textContent = 'Actualizando…';
         const isapi = await fetchIsapiStatus();
@@ -462,6 +465,8 @@ app.get('/dashboard', (req, res) => {
         statusEl.textContent = 'Al día';
       } catch (e) {
         statusEl.textContent = 'Error';
+      } finally {
+        isRefreshing = false;
       }
     }
 
