@@ -46,11 +46,17 @@ class CameraService {
 
   // Validar que los datos recibidos sean válidos
   validateDetectionData(data) {
-    if (!data?.license_plate && !data?.vehicle_type) {
+    const plate = data?.license_plate;
+    if (typeof plate !== 'string' || !plate) {
       return {
         valid: false,
-        error: 'Datos insuficientes: se requiere al menos placa o tipo de vehículo'
+        error: 'Sin patente'
       };
+    }
+
+    const ok = /^(?:[A-Z]{4}\d{2}|[A-Z]{2}\d{4})$/.test(plate);
+    if (!ok) {
+      return { valid: false, error: 'Formato de patente inválido' };
     }
 
     return { valid: true };
@@ -58,7 +64,7 @@ class CameraService {
 
   async isRecentDuplicate(supabaseClient, licensePlate, windowMs) {
     if (!supabaseClient || !licensePlate) return false;
-    const ms = Number.isFinite(windowMs) ? windowMs : 15000;
+    const ms = Number.isFinite(windowMs) ? windowMs : 15 * 60 * 1000;
 
     const { data, error } = await supabaseClient
       .from('vehicle_detections')

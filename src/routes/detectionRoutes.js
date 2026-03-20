@@ -8,7 +8,7 @@ router.post('/webhook/detection', async (req, res) => {
   try {
     const logPayload = process.env.LOG_DETECTION_PAYLOAD === '1' || process.env.LOG_DETECTION_PAYLOAD === 'true';
     const logMax = Number.parseInt(process.env.LOG_DETECTION_PAYLOAD_MAX ?? '8000', 10) || 8000;
-    const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '15', 10) || 15;
+    const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '900', 10) || 900;
 
     const safeStringify = (value) => {
       try {
@@ -55,7 +55,7 @@ router.post('/webhook/detection', async (req, res) => {
         return res.status(200).json({
           success: true,
           ignored: true,
-          reason: `Duplicado reciente (<${dedupeSeconds}s)`
+          reason: `Duplicado reciente (<${Math.round(dedupeSeconds / 60)}m)`
         });
       }
     }
