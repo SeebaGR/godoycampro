@@ -233,7 +233,22 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
     }
 
     const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '900', 10) || 900;
-    void dedupeSeconds;
+    const eventDedupeSeconds = Number.parseInt(process.env.EVENT_DEDUPE_WINDOW_SECONDS ?? '120', 10) || 120;
+    if (dedupeSeconds > 0 && detectionData.license_plate) {
+      const key = cameraService.buildEventKey(detectionData.license_plate, enrichedData);
+      if (key) {
+        const sinceIso = new Date(Date.now() - (eventDedupeSeconds * 1000)).toISOString();
+        const recent = await directus.listRecentByPlate(detectionData.license_plate, sinceIso, 25);
+        const isDup = recent.some((row) => {
+          const rowKey = cameraService.buildEventKey(detectionData.license_plate, row?.raw_data);
+          return rowKey === key;
+        });
+        if (isDup) {
+          console.warn('ISAPI TollgateInfo ignorado (evento repetido):', { license_plate: detectionData.license_plate });
+          return res.status(200).send('OK');
+        }
+      }
+    }
 
     if (!detectionData.image_url) {
       const base64 = cameraService.extractImageBase64(enrichedData);
@@ -284,6 +299,7 @@ app.all('/NotificationInfo/*', (req, res) => {
 app.get('/dashboard', (req, res) => {
   const title = process.env.CAMERA_LOCATION || 'Dashboard';
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
   res.send(`<!doctype html>
 <html lang="es">
 <head>
@@ -338,7 +354,6 @@ app.get('/dashboard', (req, res) => {
     const prevPageBtn = document.getElementById('prevPage');
     const nextPageBtn = document.getElementById('nextPage');
     const pageInfoEl = document.getElementById('pageInfo');
-    let lastKey = null;
     let currentPage = 1;
     const pageLimit = 50;
     let hasMore = false;
@@ -397,13 +412,16 @@ app.get('/dashboard', (req, res) => {
       const url = new URL('/api/detections', window.location.origin);
       url.searchParams.set('page', String(currentPage));
       url.searchParams.set('limit', String(pageLimit));
-      const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
+      url.searchParams.set('_t', String(Date.now()));
+      const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
     }
 
     async function fetchIsapiStatus() {
-      const res = await fetch(new URL('/isapi/status', window.location.origin).toString(), { headers: { 'Accept': 'application/json' } });
+      const url = new URL('/isapi/status', window.location.origin);
+      url.searchParams.set('_t', String(Date.now()));
+      const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
       if (!res.ok) return null;
       return res.json();
     }
@@ -445,19 +463,10 @@ app.get('/dashboard', (req, res) => {
           grid.innerHTML = '';
           empty.style.display = '';
           statusEl.textContent = 'Sin datos';
-          lastKey = null;
           return;
         }
 
         empty.style.display = 'none';
-        const first = items[0];
-        const newKey = first && (first.id || first.timestamp);
-        if (newKey === lastKey && grid.childElementCount > 0) {
-          statusEl.textContent = 'Al día';
-          return;
-        }
-
-        lastKey = newKey;
         grid.innerHTML = items.map(renderCard).join('');
         statusEl.textContent = 'Al día';
       } catch (e) {

@@ -36,12 +36,88 @@ router.get('/assets/:id', async (req, res) => {
   }
 });
 
+router.post('/admin/cleanup-duplicates', async (req, res) => {
+  const adminToken = typeof process.env.ADMIN_TOKEN === 'string' ? process.env.ADMIN_TOKEN.trim() : '';
+  if (!adminToken) return res.status(404).send('Not found');
+  const provided = String(req.headers['x-admin-token'] || '').trim();
+  if (provided !== adminToken) return res.status(403).json({ success: false, error: 'Forbidden' });
+
+  const windowSeconds = Number.parseInt(req.body?.windowSeconds ?? process.env.EVENT_DEDUPE_WINDOW_SECONDS ?? '120', 10) || 120;
+  const sinceMs = Date.now() - (windowSeconds * 1000);
+  const sinceIso = new Date(sinceMs).toISOString();
+
+  const extractFileId = (url) => {
+    if (typeof url !== 'string') return null;
+    const m1 = url.match(/^\/api\/assets\/([0-9a-fA-F-]{36})$/);
+    if (m1) return m1[1];
+    const m2 = url.match(/\/assets\/([0-9a-fA-F-]{36})/);
+    if (m2) return m2[1];
+    return null;
+  };
+
+  let page = 1;
+  const limit = 100;
+  const all = [];
+  while (true) {
+    const batch = await directus.listForCleanup({ page, limit });
+    const items = Array.isArray(batch?.data) ? batch.data : [];
+    for (const it of items) {
+      const dc = it?.date_created ? Date.parse(it.date_created) : Number.NaN;
+      if (Number.isFinite(dc) && dc >= sinceMs) all.push(it);
+    }
+    if (!batch?.hasMore) break;
+    page += 1;
+    if (page > 50) break;
+  }
+
+  const groups = new Map();
+  for (const it of all) {
+    const plate = typeof it?.license_plate === 'string' ? it.license_plate.trim().toUpperCase() : '';
+    if (!plate) continue;
+    const key = cameraService.buildEventKey(plate, it?.raw_data) || `${plate}|${it?.timestamp || ''}`;
+    const list = groups.get(key) || [];
+    list.push(it);
+    groups.set(key, list);
+  }
+
+  let deletedDetections = 0;
+  let deletedFiles = 0;
+
+  for (const [, list] of groups) {
+    if (!Array.isArray(list) || list.length <= 1) continue;
+    list.sort((a, b) => (Date.parse(b?.date_created || '') || 0) - (Date.parse(a?.date_created || '') || 0));
+    const keep = list[0];
+    const keepFileId = extractFileId(keep?.image_url);
+    for (const it of list.slice(1)) {
+      const fileId = extractFileId(it?.image_url);
+      await directus.deleteDetection(it.id);
+      deletedDetections += 1;
+      if (fileId && fileId !== keepFileId) {
+        try {
+          await directus.deleteFile(fileId);
+          deletedFiles += 1;
+        } catch {
+        }
+      }
+    }
+  }
+
+  return res.json({
+    success: true,
+    scanned: all.length,
+    deletedDetections,
+    deletedFiles,
+    since: sinceIso
+  });
+});
+
 // Endpoint para recibir detecciones desde la cámara DAHUA
 router.post('/webhook/detection', async (req, res) => {
   try {
     const logPayload = process.env.LOG_DETECTION_PAYLOAD === '1' || process.env.LOG_DETECTION_PAYLOAD === 'true';
     const logMax = Number.parseInt(process.env.LOG_DETECTION_PAYLOAD_MAX ?? '8000', 10) || 8000;
     const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '900', 10) || 900;
+    const eventDedupeSeconds = Number.parseInt(process.env.EVENT_DEDUPE_WINDOW_SECONDS ?? '120', 10) || 120;
 
     const safeStringify = (value) => {
       try {
@@ -87,7 +163,21 @@ router.post('/webhook/detection', async (req, res) => {
       });
     }
 
-    void dedupeSeconds;
+    if (dedupeSeconds > 0 && detectionData.license_plate) {
+      const key = cameraService.buildEventKey(detectionData.license_plate, req.body);
+      if (key) {
+        const sinceIso = new Date(Date.now() - (eventDedupeSeconds * 1000)).toISOString();
+        const recent = await directus.listRecentByPlate(detectionData.license_plate, sinceIso, 25);
+        const isDup = recent.some((row) => {
+          const rowKey = cameraService.buildEventKey(detectionData.license_plate, row?.raw_data);
+          return rowKey === key;
+        });
+        if (isDup) {
+          console.warn('Detección ignorada (evento repetido):', { license_plate: detectionData.license_plate });
+          return res.status(200).json({ success: true, ignored: true, reason: 'Evento repetido' });
+        }
+      }
+    }
 
     if (!detectionData.image_url) {
       const base64 = cameraService.extractImageBase64(req.body);
