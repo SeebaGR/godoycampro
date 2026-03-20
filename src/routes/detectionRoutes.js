@@ -2,8 +2,10 @@ const express = require('express');
 const router = express.Router();
 const cameraService = require('../services/cameraService');
 const directus = require('../config/directus');
+const { createPlateDedupeGate } = require('../services/plateDedupeGate');
 
 const detectionsCache = new Map();
+const plateGate = createPlateDedupeGate();
 
 router.get('/assets/:id', async (req, res) => {
   try {
@@ -65,98 +67,134 @@ router.post('/webhook/detection', async (req, res) => {
       console.log('Detección recibida de la cámara (raw):', safeStringify(req.body));
     }
 
-    // Normalizar datos
-    const detectionData = cameraService.normalizeDetectionData(req.body);
-    console.log('Detección normalizada:', {
-      license_plate: detectionData.license_plate,
-      timestamp: detectionData.timestamp,
-      has_image_url: Boolean(detectionData.image_url),
-      image_url_preview: typeof detectionData.image_url === 'string' ? detectionData.image_url.slice(0, 160) : null
-    });
+    const rawItems = Array.isArray(req.body) ? req.body : [req.body];
+    const normalizedPairs = rawItems.map((raw) => ({ raw, data: cameraService.normalizeDetectionData(raw) }));
 
-    // Validar datos
-    const validation = cameraService.validateDetectionData(detectionData);
-    if (!validation.valid) {
-      console.warn('Detección ignorada:', {
-        reason: validation.error,
-        license_plate: detectionData.license_plate,
-        timestamp: detectionData.timestamp
-      });
-      return res.status(200).json({
-        success: true,
-        ignored: true,
-        reason: validation.error
-      });
-    }
-
-    if (dedupeSeconds > 0 && detectionData.license_plate) {
-      const latest = await directus.getLatestTimestampByPlate(detectionData.license_plate);
-      const lastMs = latest?.timestamp ? Date.parse(latest.timestamp) : Number.NaN;
-      const currentMs = detectionData.timestamp ? Date.parse(detectionData.timestamp) : Number.NaN;
-      if (Number.isFinite(lastMs) && Number.isFinite(currentMs)) {
-        const deltaMs = currentMs - lastMs;
-        if (deltaMs >= 0 && deltaMs <= (dedupeSeconds * 1000)) {
-          console.warn('Detección ignorada (duplicado por placa):', {
-            license_plate: detectionData.license_plate,
-            delta_seconds: Math.round(deltaMs / 1000),
-            window_seconds: dedupeSeconds
-          });
-          return res.status(200).json({
-            success: true,
-            ignored: true,
-            reason: `Duplicado reciente (<${Math.round(dedupeSeconds / 60)}m)`
-          });
-        }
-        if (deltaMs < 0) {
-          console.warn('Detección ignorada (fuera de orden):', {
-            license_plate: detectionData.license_plate,
-            current: detectionData.timestamp,
-            last: latest.timestamp
-          });
-          return res.status(200).json({
-            success: true,
-            ignored: true,
-            reason: 'Evento fuera de orden'
-          });
-        }
+    const byPlate = new Map();
+    const noPlate = [];
+    for (const p of normalizedPairs) {
+      const plate = plateGate.normalizePlateKey(p.data?.license_plate);
+      if (!plate) {
+        noPlate.push(p);
+        continue;
+      }
+      const existing = byPlate.get(plate);
+      const ms = p.data?.timestamp ? Date.parse(p.data.timestamp) : Number.NaN;
+      const exMs = existing?.data?.timestamp ? Date.parse(existing.data.timestamp) : Number.NaN;
+      if (!existing || (!Number.isFinite(exMs) && Number.isFinite(ms)) || (Number.isFinite(ms) && Number.isFinite(exMs) && ms > exMs)) {
+        byPlate.set(plate, p);
       }
     }
 
-    if (!detectionData.image_url) {
-      const base64 = cameraService.extractImageBase64(req.body);
-      if (base64) {
-        let bytes;
-        try {
-          bytes = Buffer.from(base64, 'base64');
-        } catch {
-          bytes = null;
-        }
-        if (bytes) {
-          try {
-            const uploaded = await directus.uploadImageBytes(bytes, {
-              contentType: 'image/jpeg',
-              filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
-              title: `${detectionData.license_plate || 'unknown'}`
-            });
-            if (uploaded?.fileId) {
-              detectionData.image_url = `/api/assets/${uploaded.fileId}`;
-              console.log('Imagen subida a Directus:', uploaded.assetUrl?.slice(0, 180) || uploaded.fileId);
+    const selected = rawItems.length > 1 ? [...byPlate.values(), ...noPlate] : normalizedPairs;
+
+    const insertedIds = [];
+    const ignored = [];
+
+    for (const { raw, data } of selected) {
+      console.log('Detección normalizada:', {
+        license_plate: data.license_plate,
+        timestamp: data.timestamp,
+        has_image_url: Boolean(data.image_url),
+        image_url_preview: typeof data.image_url === 'string' ? data.image_url.slice(0, 160) : null
+      });
+
+      const validation = cameraService.validateDetectionData(data);
+      if (!validation.valid) {
+        console.warn('Detección ignorada:', {
+          reason: validation.error,
+          license_plate: data.license_plate,
+          timestamp: data.timestamp
+        });
+        ignored.push({ license_plate: data.license_plate || null, reason: validation.error });
+        continue;
+      }
+
+      const windowMs = Math.max(0, dedupeSeconds * 1000);
+      const eventMs = data.timestamp ? Date.parse(data.timestamp) : Number.NaN;
+      const gate = windowMs > 0 ? plateGate.begin(data.license_plate, eventMs, windowMs) : { allow: true, key: plateGate.normalizePlateKey(data.license_plate) };
+      if (!gate.allow) {
+        console.warn('Detección ignorada:', { reason: gate.reason, license_plate: data.license_plate, timestamp: data.timestamp });
+        ignored.push({ license_plate: data.license_plate || null, reason: gate.reason });
+        continue;
+      }
+
+      try {
+        if (windowMs > 0 && data.license_plate) {
+          const latest = await directus.getLatestTimestampByPlate(data.license_plate);
+          const lastMs = latest?.timestamp ? Date.parse(latest.timestamp) : Number.NaN;
+          if (Number.isFinite(lastMs) && Number.isFinite(eventMs)) {
+            const deltaMs = eventMs - lastMs;
+            if (deltaMs >= 0 && deltaMs <= windowMs) {
+              console.warn('Detección ignorada (duplicado por placa):', {
+                license_plate: data.license_plate,
+                delta_seconds: Math.round(deltaMs / 1000),
+                window_seconds: dedupeSeconds
+              });
+              ignored.push({ license_plate: data.license_plate, reason: `Duplicado reciente (<${Math.round(dedupeSeconds / 60)}m)` });
+              plateGate.end(gate.key, { acceptedEventMs: eventMs });
+              continue;
             }
-          } catch (e) {
-            console.error('Error subiendo imagen a Directus (se continúa sin imagen):', e?.message || e);
+            if (deltaMs < 0) {
+              console.warn('Detección ignorada (fuera de orden):', {
+                license_plate: data.license_plate,
+                current: data.timestamp,
+                last: latest.timestamp
+              });
+              ignored.push({ license_plate: data.license_plate, reason: 'Evento fuera de orden' });
+              plateGate.end(gate.key, { acceptedEventMs: eventMs });
+              continue;
+            }
           }
         }
+
+        if (!data.image_url) {
+          const base64 = cameraService.extractImageBase64(raw);
+          if (base64) {
+            let bytes;
+            try {
+              bytes = Buffer.from(base64, 'base64');
+            } catch {
+              bytes = null;
+            }
+            if (bytes) {
+              try {
+                const uploaded = await directus.uploadImageBytes(bytes, {
+                  contentType: 'image/jpeg',
+                  filename: `${data.license_plate || 'unknown'}-${Date.now()}.jpg`,
+                  title: `${data.license_plate || 'unknown'}`
+                });
+                if (uploaded?.fileId) {
+                  data.image_url = `/api/assets/${uploaded.fileId}`;
+                  console.log('Imagen subida a Directus:', uploaded.assetUrl?.slice(0, 180) || uploaded.fileId);
+                }
+              } catch (e) {
+                console.error('Error subiendo imagen a Directus (se continúa sin imagen):', e?.message || e);
+              }
+            }
+          }
+        }
+
+        const inserted = await directus.createDetection(data);
+        console.log('Detección guardada exitosamente:', inserted?.id);
+        insertedIds.push(inserted?.id || null);
+        plateGate.end(gate.key, { acceptedEventMs: eventMs });
+      } catch (e) {
+        plateGate.end(gate.key);
+        throw e;
       }
     }
 
-    const inserted = await directus.createDetection(detectionData);
-    console.log('Detección guardada exitosamente:', inserted?.id);
+    if (!Array.isArray(req.body)) {
+      return res.json({
+        success: true,
+        message: insertedIds.length > 0 ? 'Detección guardada correctamente' : 'Detección ignorada',
+        id: insertedIds[0] || null,
+        ignored: insertedIds.length === 0 ? ignored?.[0]?.reason || null : null
+      });
+    }
 
-    res.json({ 
-      success: true, 
-      message: 'Detección guardada correctamente',
-      id: inserted?.id || null
-    });
+    return res.json({ success: true, inserted_ids: insertedIds.filter(Boolean), ignored });
 
   } catch (error) {
     console.error('❌ Error procesando detección:', error);

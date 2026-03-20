@@ -4,6 +4,7 @@ const cors = require('cors');
 const detectionRoutes = require('./routes/detectionRoutes');
 const cameraService = require('./services/cameraService');
 const directus = require('./config/directus');
+const { createPlateDedupeGate } = require('./services/plateDedupeGate');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,6 +15,8 @@ const isapiStatus = {
   tollgateInfo: { count: 0, lastAt: null, lastPath: null },
   other: { count: 0, lastAt: null, lastPath: null }
 };
+
+const isapiPlateGate = createPlateDedupeGate();
 
 // Middleware
 app.use((req, res, next) => {
@@ -233,61 +236,80 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
     }
 
     const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '900', 10) || 900;
-    if (dedupeSeconds > 0 && detectionData.license_plate) {
-      const latest = await directus.getLatestTimestampByPlate(detectionData.license_plate);
-      const lastMs = latest?.timestamp ? Date.parse(latest.timestamp) : Number.NaN;
-      const currentMs = detectionData.timestamp ? Date.parse(detectionData.timestamp) : Number.NaN;
-      if (Number.isFinite(lastMs) && Number.isFinite(currentMs)) {
-        const deltaMs = currentMs - lastMs;
-        if (deltaMs >= 0 && deltaMs <= (dedupeSeconds * 1000)) {
-          console.warn('ISAPI TollgateInfo duplicado por placa:', {
-            license_plate: detectionData.license_plate,
-            delta_seconds: Math.round(deltaMs / 1000),
-            window_seconds: dedupeSeconds
-          });
-          return res.status(200).send('OK');
-        }
-        if (deltaMs < 0) {
-          console.warn('ISAPI TollgateInfo fuera de orden:', {
-            license_plate: detectionData.license_plate,
-            current: detectionData.timestamp,
-            last: latest.timestamp
-          });
-          return res.status(200).send('OK');
-        }
-      }
+    const windowMs = Math.max(0, dedupeSeconds * 1000);
+    const gateCurrentMs = detectionData.timestamp ? Date.parse(detectionData.timestamp) : Number.NaN;
+    const gate = (windowMs > 0 && detectionData.license_plate) ? isapiPlateGate.begin(detectionData.license_plate, gateCurrentMs, windowMs) : null;
+    if (gate && !gate.allow) {
+      console.warn('ISAPI TollgateInfo ignorado:', {
+        reason: gate.reason,
+        license_plate: detectionData.license_plate,
+        timestamp: detectionData.timestamp
+      });
+      return res.status(200).send('OK');
     }
 
-    if (!detectionData.image_url) {
-      const base64 = cameraService.extractImageBase64(enrichedData);
-      if (base64) {
-        let bytes;
-        try {
-          bytes = Buffer.from(base64, 'base64');
-        } catch {
-          bytes = null;
-        }
-        if (bytes) {
-          try {
-            const uploaded = await directus.uploadImageBytes(bytes, {
-              contentType: 'image/jpeg',
-              filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
-              title: `${detectionData.license_plate || 'unknown'}`
+    let acceptGate = false;
+    try {
+      if (windowMs > 0 && detectionData.license_plate) {
+        const latest = await directus.getLatestTimestampByPlate(detectionData.license_plate);
+        const lastMs = latest?.timestamp ? Date.parse(latest.timestamp) : Number.NaN;
+        if (Number.isFinite(lastMs) && Number.isFinite(gateCurrentMs)) {
+          const deltaMs = gateCurrentMs - lastMs;
+          if (deltaMs >= 0 && deltaMs <= windowMs) {
+            console.warn('ISAPI TollgateInfo duplicado por placa:', {
+              license_plate: detectionData.license_plate,
+              delta_seconds: Math.round(deltaMs / 1000),
+              window_seconds: dedupeSeconds
             });
-            if (uploaded?.fileId) {
-              detectionData.image_url = `/api/assets/${uploaded.fileId}`;
-              console.log('Imagen ISAPI subida a Directus:', uploaded.assetUrl?.slice(0, 180) || uploaded.fileId);
-            }
-          } catch (e) {
-            console.error('Error subiendo imagen ISAPI a Directus (se continúa sin imagen):', e?.message || e);
+            acceptGate = true;
+            return res.status(200).send('OK');
+          }
+          if (deltaMs < 0) {
+            console.warn('ISAPI TollgateInfo fuera de orden:', {
+              license_plate: detectionData.license_plate,
+              current: detectionData.timestamp,
+              last: latest.timestamp
+            });
+            acceptGate = true;
+            return res.status(200).send('OK');
           }
         }
       }
-    }
 
-    const inserted = await directus.createDetection(detectionData);
-    console.log('ISAPI TollgateInfo guardado exitosamente:', inserted?.id);
-    return res.status(200).send('OK');
+      if (!detectionData.image_url) {
+        const base64 = cameraService.extractImageBase64(enrichedData);
+        if (base64) {
+          let bytes;
+          try {
+            bytes = Buffer.from(base64, 'base64');
+          } catch {
+            bytes = null;
+          }
+          if (bytes) {
+            try {
+              const uploaded = await directus.uploadImageBytes(bytes, {
+                contentType: 'image/jpeg',
+                filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
+                title: `${detectionData.license_plate || 'unknown'}`
+              });
+              if (uploaded?.fileId) {
+                detectionData.image_url = `/api/assets/${uploaded.fileId}`;
+                console.log('Imagen ISAPI subida a Directus:', uploaded.assetUrl?.slice(0, 180) || uploaded.fileId);
+              }
+            } catch (e) {
+              console.error('Error subiendo imagen ISAPI a Directus (se continúa sin imagen):', e?.message || e);
+            }
+          }
+        }
+      }
+
+      const inserted = await directus.createDetection(detectionData);
+      console.log('ISAPI TollgateInfo guardado exitosamente:', inserted?.id);
+      acceptGate = true;
+      return res.status(200).send('OK');
+    } finally {
+      if (gate?.key) isapiPlateGate.end(gate.key, acceptGate ? { acceptedEventMs: gateCurrentMs } : {});
+    }
   } catch (error) {
     console.error('❌ Error procesando ISAPI TollgateInfo:', error);
     return res.status(200).send('OK');
