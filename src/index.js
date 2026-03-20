@@ -407,11 +407,11 @@ app.get('/dashboard', (req, res) => {
       return String(value);
     }
 
-    function formatTime(value) {
+    function formatDate(value) {
       if (!value) return '—';
       const d = new Date(value);
       if (Number.isNaN(d.getTime())) return String(value);
-      return d.toLocaleString();
+      return d.toLocaleDateString();
     }
 
     function safeHtml(text) {
@@ -431,7 +431,7 @@ app.get('/dashboard', (req, res) => {
       }
       const canShowImg = typeof imgUrl === 'string' && (imgUrl.startsWith('http') || imgUrl.startsWith('data:image'));
       const fields = [
-        ['Fecha', formatTime(item.timestamp)],
+        ['Fecha', formatDate(item.timestamp)],
         ['Tipo', toText(item.vehicle_type)],
         ['Color', toText(item.vehicle_color)],
         ['Velocidad', toText(item.speed)],
@@ -441,7 +441,7 @@ app.get('/dashboard', (req, res) => {
         ['Ubicación', toText(item.location)]
       ];
 
-      const rows = fields.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div></div>\`).join('');
+      const rows = fields.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(v)}</div></div>\`).join('');
       const img = canShowImg ? \`<div class="img"><img src="\${safeHtml(imgUrl)}" alt="snapshot" loading="lazy"></div>\` : '';
       return \`<div class="card"><h2>\${title}</h2>\${rows}\${img}</div>\`;
     }
