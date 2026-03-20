@@ -37,6 +37,7 @@ class CameraService {
       direction: cameraData.Direction || cameraData.direction || null,
       confidence: cameraData.Confidence || cameraData.confidence || null,
       timestamp: cameraData.UTC || cameraData.timestamp || new Date().toISOString(),
+      created_at: new Date().toISOString(),
       image_url: imageUrl,
       camera_id: cameraData.SerialID || cameraData.cameraId || process.env.CAMERA_ID || 'DAHUA-001',
       location: process.env.CAMERA_LOCATION || 'Pantalla Publicitaria',

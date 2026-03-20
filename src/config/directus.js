@@ -53,7 +53,7 @@ function getDirectusConfig() {
 
 async function directusRequest(method, path, { query, body, headers } = {}) {
   const { baseUrl, token } = getDirectusConfig();
-  if (!baseUrl) throw new Error('DIRECTUS_URL no está configurado');
+  if (!baseUrl) throw new Error('Falta DIRECTUS_URL (o DIRECTUSURL / DIRECTUS_BASE_URL)');
   const url = `${baseUrl}${path}${buildQueryString(query)}`;
 
   const reqHeaders = { ...(headers || {}) };
@@ -145,8 +145,8 @@ async function getLatestByPlate(plate) {
   const { collection } = getDirectusConfig();
   const query = {
     limit: 1,
-    sort: '-created_at,-id',
-    fields: 'id,created_at',
+    sort: '-date_created,-created_at,-timestamp,-id',
+    fields: 'id,created_at,date_created,timestamp',
     'filter[license_plate][_eq]': String(plate)
   };
   const payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query });

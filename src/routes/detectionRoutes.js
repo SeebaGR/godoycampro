@@ -51,15 +51,14 @@ router.post('/webhook/detection', async (req, res) => {
 
     if (dedupeSeconds > 0 && detectionData.license_plate) {
       const last = await directus.getLatestByPlate(detectionData.license_plate);
-      if (last?.created_at) {
-        const lastMs = Date.parse(last.created_at);
-        if (Number.isFinite(lastMs) && (Date.now() - lastMs) <= (dedupeSeconds * 1000)) {
-          return res.status(200).json({
-            success: true,
-            ignored: true,
-            reason: `Duplicado reciente (<${Math.round(dedupeSeconds / 60)}m)`
-          });
-        }
+      const lastAt = last?.date_created || last?.created_at || last?.timestamp || null;
+      const lastMs = lastAt ? Date.parse(lastAt) : Number.NaN;
+      if (Number.isFinite(lastMs) && (Date.now() - lastMs) <= (dedupeSeconds * 1000)) {
+        return res.status(200).json({
+          success: true,
+          ignored: true,
+          reason: `Duplicado reciente (<${Math.round(dedupeSeconds / 60)}m)`
+        });
       }
     }
 
