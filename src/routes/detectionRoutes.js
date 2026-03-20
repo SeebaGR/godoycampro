@@ -3,6 +3,39 @@ const router = express.Router();
 const cameraService = require('../services/cameraService');
 const directus = require('../config/directus');
 
+router.get('/assets/:id', async (req, res) => {
+  try {
+    const { baseUrl, token } = directus.getDirectusConfig();
+    if (!baseUrl) return res.status(500).send('DIRECTUS_URL no está configurado');
+    if (!token) return res.status(500).send('DIRECTUS_TOKEN no está configurado');
+
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).send('id requerido');
+
+    const upstream = await fetch(`${baseUrl}/assets/${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (!upstream.ok) {
+      const text = await upstream.text().catch(() => '');
+      return res.status(upstream.status).send(text || upstream.statusText);
+    }
+
+    const contentType = upstream.headers.get('content-type');
+    const contentLength = upstream.headers.get('content-length');
+    const cacheControl = upstream.headers.get('cache-control');
+    if (contentType) res.setHeader('Content-Type', contentType);
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+    res.setHeader('Cache-Control', cacheControl || 'public, max-age=31536000, immutable');
+
+    const arrayBuffer = await upstream.arrayBuffer();
+    return res.status(200).send(Buffer.from(arrayBuffer));
+  } catch (error) {
+    console.error('Error sirviendo asset de Directus:', error);
+    return res.status(500).send('Error');
+  }
+});
+
 // Endpoint para recibir detecciones desde la cámara DAHUA
 router.post('/webhook/detection', async (req, res) => {
   try {
@@ -67,14 +100,14 @@ router.post('/webhook/detection', async (req, res) => {
         }
         if (bytes) {
           try {
-            const publicUrl = await directus.uploadImageBytes(bytes, {
+            const uploaded = await directus.uploadImageBytes(bytes, {
               contentType: 'image/jpeg',
               filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
               title: `${detectionData.license_plate || 'unknown'}`
             });
-            if (publicUrl) {
-              detectionData.image_url = publicUrl;
-              console.log('Imagen subida a Directus:', publicUrl.slice(0, 180));
+            if (uploaded?.fileId) {
+              detectionData.image_url = `/api/assets/${uploaded.fileId}`;
+              console.log('Imagen subida a Directus:', uploaded.assetUrl?.slice(0, 180) || uploaded.fileId);
             }
           } catch (e) {
             console.error('Error subiendo imagen a Directus (se continúa sin imagen):', e?.message || e);

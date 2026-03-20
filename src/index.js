@@ -246,14 +246,14 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
         }
         if (bytes) {
           try {
-            const publicUrl = await directus.uploadImageBytes(bytes, {
+            const uploaded = await directus.uploadImageBytes(bytes, {
               contentType: 'image/jpeg',
               filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
               title: `${detectionData.license_plate || 'unknown'}`
             });
-            if (publicUrl) {
-              detectionData.image_url = publicUrl;
-              console.log('Imagen ISAPI subida a Directus:', publicUrl.slice(0, 180));
+            if (uploaded?.fileId) {
+              detectionData.image_url = `/api/assets/${uploaded.fileId}`;
+              console.log('Imagen ISAPI subida a Directus:', uploaded.assetUrl?.slice(0, 180) || uploaded.fileId);
             }
           } catch (e) {
             console.error('Error subiendo imagen ISAPI a Directus (se continúa sin imagen):', e?.message || e);
@@ -362,7 +362,14 @@ app.get('/dashboard', (req, res) => {
     function renderCard(item) {
       const plate = item.license_plate || 'Sin patente';
       const title = safeHtml(plate);
-      const imgUrl = item.image_url;
+      const rawImgUrl = item.image_url;
+      let imgUrl = typeof rawImgUrl === 'string' ? rawImgUrl : null;
+      const match = imgUrl ? imgUrl.match(/\/assets\/([0-9a-fA-F-]{36})/) : null;
+      if (match && match[1]) {
+        imgUrl = new URL('/api/assets/' + match[1], window.location.origin).toString();
+      } else if (imgUrl && imgUrl.startsWith('/')) {
+        imgUrl = new URL(imgUrl, window.location.origin).toString();
+      }
       const canShowImg = typeof imgUrl === 'string' && (imgUrl.startsWith('http') || imgUrl.startsWith('data:image'));
       const fields = [
         ['Fecha', formatTime(item.timestamp)],

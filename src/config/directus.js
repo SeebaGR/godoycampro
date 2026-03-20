@@ -174,7 +174,7 @@ async function uploadImageBytes(bytes, { contentType, filename, title } = {}) {
   if (!fileId) return null;
 
   const { baseUrl } = getDirectusConfig();
-  return `${baseUrl}/assets/${fileId}`;
+  return { fileId, assetUrl: `${baseUrl}/assets/${fileId}` };
 }
 
 module.exports = {
