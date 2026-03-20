@@ -364,7 +364,7 @@ app.get('/dashboard', (req, res) => {
       const title = safeHtml(plate);
       const rawImgUrl = item.image_url;
       let imgUrl = typeof rawImgUrl === 'string' ? rawImgUrl : null;
-      const match = imgUrl ? imgUrl.match(/\/assets\/([0-9a-fA-F-]{36})/) : null;
+      const match = imgUrl ? imgUrl.match(/\\/assets\\/([0-9a-fA-F-]{36})/) : null;
       if (match && match[1]) {
         imgUrl = new URL('/api/assets/' + match[1], window.location.origin).toString();
       } else if (imgUrl && imgUrl.startsWith('/')) {
