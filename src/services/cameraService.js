@@ -46,10 +46,10 @@ class CameraService {
 
   // Validar que los datos recibidos sean válidos
   validateDetectionData(data) {
-    if (!data?.license_plate) {
+    if (!data?.license_plate && !data?.vehicle_type) {
       return {
         valid: false,
-        error: 'Sin patente'
+        error: 'Datos insuficientes: se requiere al menos placa o tipo de vehículo'
       };
     }
 

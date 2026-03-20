@@ -49,7 +49,7 @@ router.post('/webhook/detection', async (req, res) => {
       });
     }
 
-    if (dedupeSeconds > 0) {
+    if (dedupeSeconds > 0 && detectionData.license_plate) {
       const isDup = await cameraService.isRecentDuplicate(supabase, detectionData.license_plate, dedupeSeconds * 1000);
       if (isDup) {
         return res.status(200).json({
