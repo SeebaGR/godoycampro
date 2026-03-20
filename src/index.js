@@ -229,15 +229,7 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
     }
 
     const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '900', 10) || 900;
-    if (dedupeSeconds > 0 && detectionData.license_plate) {
-      const last = await directus.getLatestByPlate(detectionData.license_plate);
-      const lastAt = last?.date_created || last?.created_at || last?.timestamp || null;
-      const lastMs = lastAt ? Date.parse(lastAt) : Number.NaN;
-      if (Number.isFinite(lastMs) && (Date.now() - lastMs) <= (dedupeSeconds * 1000)) {
-        console.warn(`ISAPI TollgateInfo duplicado reciente (<${Math.round(dedupeSeconds / 60)}m):`, detectionData.license_plate);
-        return res.status(200).send('OK');
-      }
-    }
+    void dedupeSeconds;
 
     if (!detectionData.image_url) {
       const base64 = cameraService.extractImageBase64(enrichedData);
@@ -266,14 +258,8 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
       }
     }
 
-    let inserted;
-    try {
-      inserted = await directus.createDetection(detectionData);
-      console.log('ISAPI TollgateInfo guardado exitosamente:', inserted?.id);
-    } catch (e) {
-      console.error('Error guardando ISAPI TollgateInfo en Directus:', e?.message || e);
-      return res.status(200).send('OK');
-    }
+    const inserted = await directus.createDetection(detectionData);
+    console.log('ISAPI TollgateInfo guardado exitosamente:', inserted?.id);
     return res.status(200).send('OK');
   } catch (error) {
     console.error('❌ Error procesando ISAPI TollgateInfo:', error);

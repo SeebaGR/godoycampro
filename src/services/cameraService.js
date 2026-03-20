@@ -1,23 +1,6 @@
 // Servicio para procesar datos recibidos de la cámara DAHUA
 const crypto = require('crypto');
 class CameraService {
-  serializeRawData(payload) {
-    const max = Number.parseInt(process.env.RAW_DATA_MAX_CHARS ?? '20000', 10) || 20000;
-    try {
-      const redacted = this.redactImageData(payload);
-      const text = JSON.stringify(redacted);
-      if (typeof text !== 'string') return null;
-      return text.length > max ? text.slice(0, max) + '…' : text;
-    } catch {
-      try {
-        const text = JSON.stringify(payload);
-        if (typeof text !== 'string') return null;
-        return text.length > max ? text.slice(0, max) + '…' : text;
-      } catch {
-        return null;
-      }
-    }
-  }
 
   // Normalizar datos recibidos de la cámara al formato de nuestra base de datos
   normalizeDetectionData(cameraData) {
@@ -45,7 +28,7 @@ class CameraService {
       cameraData?.picURL ??
       null;
     const imageUrl = typeof rawImageUrl === 'string' ? (rawImageUrl.trim() || null) : (rawImageUrl != null ? String(rawImageUrl).trim() || null : null);
-    const rawDataText = this.serializeRawData(cameraData);
+    const redactedRawData = this.redactImageData(cameraData);
 
     return {
       license_plate: licensePlate,
@@ -55,29 +38,21 @@ class CameraService {
       direction: cameraData.Direction || cameraData.direction || null,
       confidence: cameraData.Confidence || cameraData.confidence || null,
       timestamp: cameraData.UTC || cameraData.timestamp || new Date().toISOString(),
-      created_at: new Date().toISOString(),
       image_url: imageUrl,
       camera_id: cameraData.SerialID || cameraData.cameraId || process.env.CAMERA_ID || 'DAHUA-001',
       location: process.env.CAMERA_LOCATION || 'Pantalla Publicitaria',
-      raw_data: rawDataText
+      raw_data: redactedRawData
     };
   }
 
   // Validar que los datos recibidos sean válidos
   validateDetectionData(data) {
-    const plate = data?.license_plate;
-    if (typeof plate !== 'string' || !plate) {
+    if (!data?.license_plate && !data?.vehicle_type) {
       return {
         valid: false,
-        error: 'Sin patente'
+        error: 'Datos insuficientes: se requiere al menos placa o tipo de vehículo'
       };
     }
-
-    const ok = /^(?:[A-Z]{4}\d{2}|[A-Z]{2}\d{4})$/.test(plate);
-    if (!ok) {
-      return { valid: false, error: 'Formato de patente inválido' };
-    }
-
     return { valid: true };
   }
 
