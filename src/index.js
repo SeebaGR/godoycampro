@@ -249,21 +249,31 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
           bytes = null;
         }
         if (bytes) {
-          const publicUrl = await directus.uploadImageBytes(bytes, {
-            contentType: 'image/jpeg',
-            filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
-            title: `${detectionData.license_plate || 'unknown'}`
-          });
-          if (publicUrl) {
-            detectionData.image_url = publicUrl;
-            console.log('Imagen ISAPI subida a Directus:', publicUrl.slice(0, 180));
+          try {
+            const publicUrl = await directus.uploadImageBytes(bytes, {
+              contentType: 'image/jpeg',
+              filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
+              title: `${detectionData.license_plate || 'unknown'}`
+            });
+            if (publicUrl) {
+              detectionData.image_url = publicUrl;
+              console.log('Imagen ISAPI subida a Directus:', publicUrl.slice(0, 180));
+            }
+          } catch (e) {
+            console.error('Error subiendo imagen ISAPI a Directus (se continúa sin imagen):', e?.message || e);
           }
         }
       }
     }
 
-    const inserted = await directus.createDetection(detectionData);
-    console.log('ISAPI TollgateInfo guardado exitosamente:', inserted?.id);
+    let inserted;
+    try {
+      inserted = await directus.createDetection(detectionData);
+      console.log('ISAPI TollgateInfo guardado exitosamente:', inserted?.id);
+    } catch (e) {
+      console.error('Error guardando ISAPI TollgateInfo en Directus:', e?.message || e);
+      return res.status(200).send('OK');
+    }
     return res.status(200).send('OK');
   } catch (error) {
     console.error('❌ Error procesando ISAPI TollgateInfo:', error);
@@ -319,6 +329,9 @@ app.get('/dashboard', (req, res) => {
       <span class="pill">Últimas detecciones</span>
       <span id="status" class="pill">Cargando…</span>
       <span id="isapi" class="pill">ISAPI: —</span>
+      <button id="prevPage">◀</button>
+      <span id="pageInfo" class="pill">Página 1</span>
+      <button id="nextPage">▶</button>
       <button id="refresh">Actualizar</button>
     </div>
   </header>
@@ -332,7 +345,13 @@ app.get('/dashboard', (req, res) => {
     const statusEl = document.getElementById('status');
     const isapiEl = document.getElementById('isapi');
     const refreshBtn = document.getElementById('refresh');
+    const prevPageBtn = document.getElementById('prevPage');
+    const nextPageBtn = document.getElementById('nextPage');
+    const pageInfoEl = document.getElementById('pageInfo');
     let lastKey = null;
+    let currentPage = 1;
+    const pageLimit = 50;
+    let hasMore = false;
 
     function toText(value) {
       if (value === null || value === undefined || value === '') return '—';
@@ -371,10 +390,16 @@ app.get('/dashboard', (req, res) => {
       return \`<div class="card"><h2>\${title}</h2>\${rows}\${img}</div>\`;
     }
 
+    function setPage(newPage) {
+      const n = Math.max(1, Number.parseInt(newPage, 10) || 1);
+      currentPage = n;
+      lastKey = null;
+    }
+
     async function fetchDetections() {
       const url = new URL('/api/detections', window.location.origin);
-      url.searchParams.set('page', '1');
-      url.searchParams.set('limit', '24');
+      url.searchParams.set('page', String(currentPage));
+      url.searchParams.set('limit', String(pageLimit));
       const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       return res.json();
@@ -414,6 +439,10 @@ app.get('/dashboard', (req, res) => {
         }
         const payload = await fetchDetections();
         const items = (payload && payload.data) ? payload.data : [];
+        hasMore = Boolean(payload && payload.pagination && payload.pagination.hasMore);
+        pageInfoEl.textContent = 'Página ' + currentPage;
+        prevPageBtn.disabled = currentPage <= 1;
+        nextPageBtn.disabled = !hasMore;
 
         if (items.length === 0) {
           grid.innerHTML = '';
@@ -440,6 +469,16 @@ app.get('/dashboard', (req, res) => {
     }
 
     refreshBtn.addEventListener('click', refresh);
+    prevPageBtn.addEventListener('click', () => {
+      if (currentPage <= 1) return;
+      setPage(currentPage - 1);
+      refresh();
+    });
+    nextPageBtn.addEventListener('click', () => {
+      if (!hasMore) return;
+      setPage(currentPage + 1);
+      refresh();
+    });
     refresh();
     setInterval(refresh, 2500);
   </script>

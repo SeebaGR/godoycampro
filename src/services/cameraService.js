@@ -1,6 +1,24 @@
 // Servicio para procesar datos recibidos de la cámara DAHUA
 const crypto = require('crypto');
 class CameraService {
+  serializeRawData(payload) {
+    const max = Number.parseInt(process.env.RAW_DATA_MAX_CHARS ?? '20000', 10) || 20000;
+    try {
+      const redacted = this.redactImageData(payload);
+      const text = JSON.stringify(redacted);
+      if (typeof text !== 'string') return null;
+      return text.length > max ? text.slice(0, max) + '…' : text;
+    } catch {
+      try {
+        const text = JSON.stringify(payload);
+        if (typeof text !== 'string') return null;
+        return text.length > max ? text.slice(0, max) + '…' : text;
+      } catch {
+        return null;
+      }
+    }
+  }
+
   // Normalizar datos recibidos de la cámara al formato de nuestra base de datos
   normalizeDetectionData(cameraData) {
     const rawPlate = cameraData?.PlateNumber ?? cameraData?.plateNumber ?? null;
@@ -27,7 +45,7 @@ class CameraService {
       cameraData?.picURL ??
       null;
     const imageUrl = typeof rawImageUrl === 'string' ? (rawImageUrl.trim() || null) : (rawImageUrl != null ? String(rawImageUrl).trim() || null : null);
-    const redactedRawData = this.redactImageData(cameraData);
+    const rawDataText = this.serializeRawData(cameraData);
 
     return {
       license_plate: licensePlate,
@@ -41,7 +59,7 @@ class CameraService {
       image_url: imageUrl,
       camera_id: cameraData.SerialID || cameraData.cameraId || process.env.CAMERA_ID || 'DAHUA-001',
       location: process.env.CAMERA_LOCATION || 'Pantalla Publicitaria',
-      raw_data: redactedRawData
+      raw_data: rawDataText
     };
   }
 

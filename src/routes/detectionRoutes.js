@@ -72,21 +72,35 @@ router.post('/webhook/detection', async (req, res) => {
           bytes = null;
         }
         if (bytes) {
-          const publicUrl = await directus.uploadImageBytes(bytes, {
-            contentType: 'image/jpeg',
-            filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
-            title: `${detectionData.license_plate || 'unknown'}`
-          });
-          if (publicUrl) {
-            detectionData.image_url = publicUrl;
-            console.log('Imagen subida a Directus:', publicUrl.slice(0, 180));
+          try {
+            const publicUrl = await directus.uploadImageBytes(bytes, {
+              contentType: 'image/jpeg',
+              filename: `${detectionData.license_plate || 'unknown'}-${Date.now()}.jpg`,
+              title: `${detectionData.license_plate || 'unknown'}`
+            });
+            if (publicUrl) {
+              detectionData.image_url = publicUrl;
+              console.log('Imagen subida a Directus:', publicUrl.slice(0, 180));
+            }
+          } catch (e) {
+            console.error('Error subiendo imagen a Directus (se continúa sin imagen):', e?.message || e);
           }
         }
       }
     }
 
-    const inserted = await directus.createDetection(detectionData);
-    console.log('Detección guardada exitosamente:', inserted?.id);
+    let inserted;
+    try {
+      inserted = await directus.createDetection(detectionData);
+      console.log('Detección guardada exitosamente:', inserted?.id);
+    } catch (e) {
+      console.error('Error guardando detección en Directus:', e?.message || e);
+      return res.status(200).json({
+        success: true,
+        ignored: true,
+        reason: 'Error guardando en Directus'
+      });
+    }
 
     res.json({ 
       success: true, 
