@@ -224,7 +224,11 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
     const validation = cameraService.validateDetectionData(detectionData);
 
     if (!validation.valid) {
-      console.warn('ISAPI TollgateInfo ignorado:', validation.error);
+      console.warn('ISAPI TollgateInfo ignorado:', {
+        reason: validation.error,
+        license_plate: detectionData.license_plate,
+        timestamp: detectionData.timestamp
+      });
       return res.status(200).send('OK');
     }
 
@@ -232,8 +236,13 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
     if (dedupeSeconds > 0 && detectionData.license_plate) {
       const last = await directus.getLatestByPlate(detectionData.license_plate);
       const lastMs = last?.date_created ? Date.parse(last.date_created) : Number.NaN;
-      if (Number.isFinite(lastMs) && (Date.now() - lastMs) <= (dedupeSeconds * 1000)) {
-        console.warn(`ISAPI TollgateInfo duplicado reciente (<${Math.round(dedupeSeconds / 60)}m):`, detectionData.license_plate);
+      const deltaMs = Number.isFinite(lastMs) ? (Date.now() - lastMs) : Number.NaN;
+      if (Number.isFinite(deltaMs) && deltaMs >= 0 && deltaMs <= (dedupeSeconds * 1000)) {
+        console.warn('ISAPI TollgateInfo duplicado reciente:', {
+          license_plate: detectionData.license_plate,
+          delta_seconds: Math.round(deltaMs / 1000),
+          window_seconds: dedupeSeconds
+        });
         return res.status(200).send('OK');
       }
     }

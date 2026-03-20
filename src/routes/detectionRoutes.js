@@ -42,6 +42,11 @@ router.post('/webhook/detection', async (req, res) => {
     // Validar datos
     const validation = cameraService.validateDetectionData(detectionData);
     if (!validation.valid) {
+      console.warn('Detección ignorada:', {
+        reason: validation.error,
+        license_plate: detectionData.license_plate,
+        timestamp: detectionData.timestamp
+      });
       return res.status(200).json({
         success: true,
         ignored: true,
@@ -52,7 +57,13 @@ router.post('/webhook/detection', async (req, res) => {
     if (dedupeSeconds > 0 && detectionData.license_plate) {
       const last = await directus.getLatestByPlate(detectionData.license_plate);
       const lastMs = last?.date_created ? Date.parse(last.date_created) : Number.NaN;
-      if (Number.isFinite(lastMs) && (Date.now() - lastMs) <= (dedupeSeconds * 1000)) {
+      const deltaMs = Number.isFinite(lastMs) ? (Date.now() - lastMs) : Number.NaN;
+      if (Number.isFinite(deltaMs) && deltaMs >= 0 && deltaMs <= (dedupeSeconds * 1000)) {
+        console.warn('Detección ignorada (duplicado):', {
+          license_plate: detectionData.license_plate,
+          delta_seconds: Math.round(deltaMs / 1000),
+          window_seconds: dedupeSeconds
+        });
         return res.status(200).json({
           success: true,
           ignored: true,
