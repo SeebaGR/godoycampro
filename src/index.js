@@ -229,7 +229,14 @@ app.all('/NotificationInfo/TollgateInfo', async (req, res) => {
     }
 
     const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '900', 10) || 900;
-    void dedupeSeconds;
+    if (dedupeSeconds > 0 && detectionData.license_plate) {
+      const last = await directus.getLatestByPlate(detectionData.license_plate);
+      const lastMs = last?.date_created ? Date.parse(last.date_created) : Number.NaN;
+      if (Number.isFinite(lastMs) && (Date.now() - lastMs) <= (dedupeSeconds * 1000)) {
+        console.warn(`ISAPI TollgateInfo duplicado reciente (<${Math.round(dedupeSeconds / 60)}m):`, detectionData.license_plate);
+        return res.status(200).send('OK');
+      }
+    }
 
     if (!detectionData.image_url) {
       const base64 = cameraService.extractImageBase64(enrichedData);

@@ -49,7 +49,17 @@ router.post('/webhook/detection', async (req, res) => {
       });
     }
 
-    void dedupeSeconds;
+    if (dedupeSeconds > 0 && detectionData.license_plate) {
+      const last = await directus.getLatestByPlate(detectionData.license_plate);
+      const lastMs = last?.date_created ? Date.parse(last.date_created) : Number.NaN;
+      if (Number.isFinite(lastMs) && (Date.now() - lastMs) <= (dedupeSeconds * 1000)) {
+        return res.status(200).json({
+          success: true,
+          ignored: true,
+          reason: `Duplicado reciente (<${Math.round(dedupeSeconds / 60)}m)`
+        });
+      }
+    }
 
     if (!detectionData.image_url) {
       const base64 = cameraService.extractImageBase64(req.body);

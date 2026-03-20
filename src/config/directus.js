@@ -145,8 +145,8 @@ async function getLatestByPlate(plate) {
   const { collection } = getDirectusConfig();
   const query = {
     limit: 1,
-    sort: '-date_created,-created_at,-timestamp,-id',
-    fields: 'id,created_at,date_created,timestamp',
+    sort: '-date_created,-id',
+    fields: 'id,date_created',
     'filter[license_plate][_eq]': String(plate)
   };
   const payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query });
