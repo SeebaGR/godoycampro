@@ -154,19 +154,6 @@ async function getLatestByPlate(plate) {
   return rows[0] || null;
 }
 
-async function listRecentByPlate(plate, sinceIso, limit = 25) {
-  const { collection } = getDirectusConfig();
-  const query = {
-    limit: Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 25)),
-    sort: '-date_created,-id',
-    fields: 'id,date_created,timestamp,license_plate,image_url,raw_data',
-    'filter[license_plate][_eq]': String(plate)
-  };
-  if (sinceIso) query['filter[date_created][_gte]'] = String(sinceIso);
-  const payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query });
-  return Array.isArray(payload?.data) ? payload.data : [];
-}
-
 async function createDetection(data) {
   const { collection } = getDirectusConfig();
   const payload = await directusRequest('POST', `/items/${encodeURIComponent(collection)}`, {
@@ -174,37 +161,6 @@ async function createDetection(data) {
     body: JSON.stringify(data)
   });
   return payload?.data || null;
-}
-
-async function deleteDetection(id) {
-  const { collection } = getDirectusConfig();
-  await directusRequest('DELETE', `/items/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`);
-  return true;
-}
-
-async function deleteFile(id) {
-  await directusRequest('DELETE', `/files/${encodeURIComponent(id)}`);
-  return true;
-}
-
-async function listForCleanup({ page, limit } = {}) {
-  const { collection } = getDirectusConfig();
-  const safePage = Math.max(1, Number.parseInt(page ?? '1', 10) || 1);
-  const safeLimit = Math.min(200, Math.max(1, Number.parseInt(limit ?? '100', 10) || 100));
-  const offset = (safePage - 1) * safeLimit;
-
-  const query = {
-    limit: safeLimit + 1,
-    offset,
-    sort: '-date_created,-id',
-    fields: 'id,date_created,timestamp,license_plate,image_url,raw_data'
-  };
-
-  const payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query });
-  const items = Array.isArray(payload?.data) ? payload.data : [];
-  const hasMore = items.length > safeLimit;
-  const sliced = hasMore ? items.slice(0, safeLimit) : items;
-  return { data: sliced, hasMore };
 }
 
 async function uploadImageBytes(bytes, { contentType, filename, title } = {}) {
@@ -228,10 +184,6 @@ module.exports = {
   searchByPlate,
   listStatsFields,
   getLatestByPlate,
-  listRecentByPlate,
   createDetection,
-  deleteDetection,
-  deleteFile,
-  listForCleanup,
   uploadImageBytes
 };

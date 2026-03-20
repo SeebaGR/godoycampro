@@ -1,67 +1,6 @@
 // Servicio para procesar datos recibidos de la cámara DAHUA
 const crypto = require('crypto');
 class CameraService {
-  extractEventInfo(payload) {
-    const parseMaybeJson = (value) => {
-      if (typeof value !== 'string') return null;
-      const t = value.trim();
-      if (!t) return null;
-      if (!(t.startsWith('{') || t.startsWith('['))) return null;
-      try {
-        return JSON.parse(t);
-      } catch {
-        return null;
-      }
-    };
-
-    const tryFromObject = (obj) => {
-      if (!obj || typeof obj !== 'object') return null;
-      const pic = obj?.__rawObject?.Picture || obj?.Picture || null;
-      if (!pic || typeof pic !== 'object') return null;
-
-      const plate = pic?.Plate || {};
-      const snap = pic?.SnapInfo || {};
-      const normal = pic?.NormalPic || {};
-      const cutout = pic?.CutoutPic || {};
-
-      const uploadNum = Number.isFinite(plate?.UploadNum) ? plate.UploadNum : (Number.isFinite(Number.parseInt(plate?.UploadNum, 10)) ? Number.parseInt(plate.UploadNum, 10) : null);
-      const snapTime = typeof snap?.SnapTime === 'string' && snap.SnapTime.trim() ? snap.SnapTime.trim() : null;
-      const accurateTime = typeof snap?.AccurateTime === 'string' && snap.AccurateTime.trim() ? snap.AccurateTime.trim() : null;
-      const normalPicName = typeof normal?.PicName === 'string' && normal.PicName.trim() ? normal.PicName.trim() : null;
-      const cutoutPicName = typeof cutout?.PicName === 'string' && cutout.PicName.trim() ? cutout.PicName.trim() : null;
-
-      return { uploadNum, snapTime, accurateTime, normalPicName, cutoutPicName };
-    };
-
-    if (payload == null) return null;
-    if (typeof payload === 'string') {
-      const parsed = parseMaybeJson(payload);
-      return parsed ? tryFromObject(parsed) : null;
-    }
-
-    const direct = tryFromObject(payload);
-    if (direct) return direct;
-
-    const nested = payload && typeof payload === 'object' ? (payload.__raw || payload.raw || payload.__rawObject || null) : null;
-    const parsed = parseMaybeJson(nested);
-    return parsed ? tryFromObject(parsed) : null;
-  }
-
-  buildEventKey(licensePlate, payload) {
-    const plate = typeof licensePlate === 'string' ? licensePlate.trim().toUpperCase() : '';
-    if (!plate) return null;
-    const info = this.extractEventInfo(payload) || {};
-    const parts = [
-      plate,
-      info.uploadNum != null ? `u${info.uploadNum}` : '',
-      info.accurateTime ? `a${info.accurateTime}` : '',
-      info.snapTime ? `s${info.snapTime}` : '',
-      info.normalPicName ? `n${info.normalPicName}` : '',
-      info.cutoutPicName ? `c${info.cutoutPicName}` : ''
-    ].filter(Boolean);
-    if (parts.length <= 1) return null;
-    return parts.join('|');
-  }
 
   // Normalizar datos recibidos de la cámara al formato de nuestra base de datos
   normalizeDetectionData(cameraData) {
