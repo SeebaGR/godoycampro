@@ -441,7 +441,7 @@ app.get('/dashboard', (req, res) => {
         ['Ubicación', toText(item.location)]
       ];
 
-      const rows = fields.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(v)}</div></div>\`).join('');
+      const rows = fields.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div></div>\`).join('');
       const img = canShowImg ? \`<div class="img"><img src="\${safeHtml(imgUrl)}" alt="snapshot" loading="lazy"></div>\` : '';
       return \`<div class="card"><h2>\${title}</h2>\${rows}\${img}</div>\`;
     }
