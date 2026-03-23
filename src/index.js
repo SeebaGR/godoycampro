@@ -458,6 +458,17 @@ app.get('/dashboard', (req, res) => {
       return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
+    const enrichCache = new Map();
+    let getApiCooldownUntilMs = 0;
+
+    function isRateLimitedPayload(payload) {
+      if (!payload || typeof payload !== 'object') return false;
+      if (payload.reason === 'rate_limited') return true;
+      if (payload.upstream_status === 429) return true;
+      if (payload.status === 429) return true;
+      return false;
+    }
+
     function renderCard(item) {
       const plate = item.license_plate || 'Sin patente';
       const title = safeHtml(plate);
@@ -489,11 +500,13 @@ app.get('/dashboard', (req, res) => {
         ['Ubicación', toText(item.location)]
       ];
 
-      const rows = fields.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(v)}</div></div>\`).join('');
+      const manualRows = fields.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(v)}</div></div>\`).join('');
       const img = canShowImg ? \`<div class="img"><img src="\${safeHtml(imgUrl)}" alt="snapshot" loading="lazy"></div>\` : '';
-      const actions = id ? \`<div class="actions"><button class="more" data-id="\${safeHtml(id)}" type="button">Ver más</button></div>\` : '';
-      const more = id ? \`<div class="moreBox" id="more-\${safeHtml(id)}" hidden></div>\` : '';
-      return \`<div class="card" data-id="\${safeHtml(id)}"><h2>\${title}</h2>\${rows}\${img}\${actions}\${more}</div>\`;
+      const initialInfo = id
+        ? \`<div class="moreBox" id="more-\${safeHtml(id)}"><div class="moreTitle">Información vehículo</div><div class="row"><div class="k">Estado</div><div class="v">Cargando…</div></div></div>\`
+        : \`<div class="moreBox"><div class="moreTitle">Manual</div>\${manualRows}</div>\`;
+      const manualTpl = id ? \`<template class="manualTpl"><div class="moreTitle">Manual</div>\${manualRows}</template>\` : '';
+      return \`<div class="card" data-id="\${safeHtml(id)}"><h2>\${title}</h2>\${img}\${initialInfo}\${manualTpl}</div>\`;
     }
 
     function formatMoney(value) {
@@ -555,11 +568,94 @@ app.get('/dashboard', (req, res) => {
       return \`<div class="moreTitle">Información vehículo</div>\${htmlRows}\`;
     }
 
+    function setMoreBoxHtml(id, html) {
+      const box = document.getElementById('more-' + id);
+      if (!box) return;
+      box.innerHTML = html;
+    }
+
+    function cssEscape(value) {
+      if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+      return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    }
+
+    function renderManualFallbackForId(id) {
+      const card = grid && grid.querySelector ? grid.querySelector(\`.card[data-id="\${cssEscape(id)}"]\`) : null;
+      const tpl = card ? card.querySelector('template.manualTpl') : null;
+      if (!tpl) return \`<div class="moreTitle">Manual</div><div class="row"><div class="k">Detalle</div><div class="v">Sin datos</div></div>\`;
+      return tpl.innerHTML;
+    }
+
+    function applyManualFallbackForAllRenderedCards() {
+      if (!grid || !grid.querySelectorAll) return;
+      const cards = Array.from(grid.querySelectorAll('.card[data-id]'));
+      for (const el of cards) {
+        const id = el.getAttribute('data-id') || '';
+        if (!id) continue;
+        setMoreBoxHtml(id, renderManualFallbackForId(id));
+      }
+    }
+
+    function applyEnrichToCard(id, payload) {
+      if (!id) return;
+      if (isRateLimitedPayload(payload)) {
+        getApiCooldownUntilMs = Math.max(getApiCooldownUntilMs, Date.now() + 60000);
+        applyManualFallbackForAllRenderedCards();
+        return;
+      }
+      setMoreBoxHtml(id, renderMoreData(payload || { success: true, data: null }));
+    }
+
     async function fetchMore(id) {
       const url = new URL('/api/detections/' + encodeURIComponent(id) + '/enrich', window.location.origin);
       const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
       if (!res.ok) return { success: true, data: null };
       return res.json();
+    }
+
+    async function runPool(ids, limit, worker) {
+      const pending = ids.slice();
+      const n = Math.max(1, Math.min(limit, pending.length));
+      const runners = Array.from({ length: n }, async () => {
+        while (pending.length) {
+          const id = pending.shift();
+          await worker(id);
+        }
+      });
+      await Promise.all(runners);
+    }
+
+    async function hydrateCardsWithGetApi() {
+      if (!grid) return;
+      if (Date.now() < getApiCooldownUntilMs) {
+        const cards = Array.from(grid.querySelectorAll('.card[data-id]'));
+        for (const el of cards) {
+          const id = el.getAttribute('data-id') || '';
+          if (!id) continue;
+          setMoreBoxHtml(id, renderManualFallbackForId(id));
+        }
+        return;
+      }
+
+      const ids = Array.from(grid.querySelectorAll('.card[data-id]'))
+        .map((el) => el.getAttribute('data-id') || '')
+        .filter(Boolean);
+
+      await runPool(ids, 4, async (id) => {
+        if (Date.now() < getApiCooldownUntilMs) {
+          setMoreBoxHtml(id, renderManualFallbackForId(id));
+          return;
+        }
+
+        if (enrichCache.has(id)) {
+          applyEnrichToCard(id, enrichCache.get(id));
+          return;
+        }
+
+        const payload = await fetchMore(id).catch(() => null);
+        enrichCache.set(id, payload);
+        applyEnrichToCard(id, payload);
+      });
     }
 
     function setPage(newPage) {
@@ -643,6 +739,7 @@ app.get('/dashboard', (req, res) => {
 
         lastKey = newKey;
         grid.innerHTML = items.map(renderCard).join('');
+        hydrateCardsWithGetApi();
         statusEl.textContent = 'Al día';
       } catch (e) {
         statusEl.textContent = 'Error';
@@ -664,30 +761,6 @@ app.get('/dashboard', (req, res) => {
       if (!hasMore) return;
       setPage(currentPage + 1);
       refresh();
-    });
-    grid.addEventListener('click', async (ev) => {
-      const btn = ev && ev.target && ev.target.closest ? ev.target.closest('button.more') : null;
-      if (!btn) return;
-      const id = btn.getAttribute('data-id');
-      if (!id) return;
-      const box = document.getElementById('more-' + id);
-      if (!box) return;
-      const isHidden = box.hasAttribute('hidden');
-      if (!isHidden) {
-        box.setAttribute('hidden', '');
-        btn.textContent = 'Ver más';
-        return;
-      }
-      btn.textContent = 'Cargando…';
-      box.removeAttribute('hidden');
-      if (!box.getAttribute('data-loaded')) {
-        const payload = await fetchMore(id).catch(() => ({ success: true, data: null }));
-        box.innerHTML = renderMoreData(payload);
-        if (payload && payload.data) {
-          box.setAttribute('data-loaded', '1');
-        }
-      }
-      btn.textContent = 'Ocultar';
     });
     if (pageSizeEl) {
       pageSizeEl.addEventListener('change', () => {
