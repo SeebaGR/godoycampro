@@ -668,6 +668,21 @@ app.get('/dashboard', (req, res) => {
       return res.json();
     }
 
+    async function fetchDetectionById(id) {
+      const url = new URL('/api/detections/' + encodeURIComponent(id), window.location.origin);
+      const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+      if (!res.ok) return null;
+      const payload = await res.json().catch(() => null);
+      const item = payload && payload.data ? payload.data : null;
+      if (!item) return null;
+      let ga = item.getapi || null;
+      if (typeof ga === 'string') ga = safeJsonParse(ga);
+      if (ga && typeof ga === 'object' && ga.fetched_at) {
+        return { success: true, data: ga };
+      }
+      return null;
+    }
+
     async function runPool(ids, limit, worker) {
       const pending = ids.slice();
       const n = Math.max(1, Math.min(limit, pending.length));
@@ -722,6 +737,13 @@ app.get('/dashboard', (req, res) => {
 
         if (hasSuccessfulGetApiCached(id)) {
           applyEnrichToCard(id, enrichCache.get(id));
+          return;
+        }
+
+        const saved = await fetchDetectionById(id).catch(() => null);
+        if (saved && isSuccessfulGetApiPayload(saved)) {
+          enrichCache.set(id, saved);
+          applyEnrichToCard(id, saved);
           return;
         }
 
