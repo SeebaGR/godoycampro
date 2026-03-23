@@ -574,13 +574,10 @@ app.get('/dashboard', (req, res) => {
       box.innerHTML = html;
     }
 
-    function cssEscape(value) {
-      if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
-      return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    }
-
     function renderManualFallbackForId(id) {
-      const card = grid && grid.querySelector ? grid.querySelector(\`.card[data-id="\${cssEscape(id)}"]\`) : null;
+      const card = grid && grid.querySelectorAll
+        ? Array.from(grid.querySelectorAll('.card[data-id]')).find((el) => (el.getAttribute('data-id') || '') === id)
+        : null;
       const tpl = card ? card.querySelector('template.manualTpl') : null;
       if (!tpl) return \`<div class="moreTitle">Manual</div><div class="row"><div class="k">Detalle</div><div class="v">Sin datos</div></div>\`;
       return tpl.innerHTML;
