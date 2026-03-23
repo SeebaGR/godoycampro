@@ -356,11 +356,23 @@ router.get('/detections', async (req, res) => {
     const elapsedMs = Date.now() - startedAt;
     const pollAfterMs = Math.min(maxPollMs, Math.max(basePollMs, Math.round(elapsedMs * 1.25)));
 
-    const dataWithGetApi = (Array.isArray(result.data) ? result.data : []).map((item) => {
+    const baseItems = Array.isArray(result.data) ? result.data : [];
+    const dataWithGetApi = baseItems.map((item) => {
       const rawObj = safeJsonParse(item?.raw_data) || null;
       const getapi = rawObj?.enrichment?.getapi || null;
       return { ...(item || {}), getapi };
     });
+    const missingIds = dataWithGetApi.filter((x) => !x.getapi && !x.raw_data && x.id).map((x) => x.id);
+    for (const id of missingIds) {
+      try {
+        const full = await directus.getDetectionById(id);
+        const rawObj = safeJsonParse(full?.raw_data) || null;
+        const getapi = rawObj?.enrichment?.getapi || null;
+        const idx = dataWithGetApi.findIndex((x) => x.id === id);
+        if (idx !== -1) dataWithGetApi[idx] = { ...dataWithGetApi[idx], getapi };
+      } catch {
+      }
+    }
 
     const payload = { success: true, data: dataWithGetApi, pagination: result.pagination, poll_after_ms: pollAfterMs };
     if (cacheMs > 0) {
