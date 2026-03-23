@@ -543,8 +543,11 @@ app.get('/dashboard', (req, res) => {
 
       let existingGetApi = null;
       if (id) {
-        const fromField = item && item.getapi && typeof item.getapi === 'object' ? item.getapi : null;
-        if (fromField && fromField.fetched_at) existingGetApi = fromField;
+        let fromField = null;
+        if (item && item.getapi) {
+          fromField = typeof item.getapi === 'string' ? safeJsonParse(item.getapi) : item.getapi;
+        }
+        if (fromField && typeof fromField === 'object' && fromField.fetched_at) existingGetApi = fromField;
       }
 
       let moreInner = \`<div class="moreTitle">Información vehículo</div><div class="row"><div class="k">Estado</div><div class="v">Cargando…</div></div>\`;
