@@ -454,6 +454,18 @@ app.get('/dashboard', (req, res) => {
       });
     }
 
+    function formatDateOnly(value) {
+      if (!value) return '—';
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return String(value);
+      return d.toLocaleDateString('es-CL', {
+        timeZone: displayTimeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+    }
+
     function safeHtml(text) {
       return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
@@ -471,6 +483,7 @@ app.get('/dashboard', (req, res) => {
 
     const enrichCache = new Map();
     const enrichInFlight = new Set();
+    const captureAtById = new Map();
     let getApiCooldownUntilMs = 0;
     const enrichRetry = new Map();
     const enrichMaxPerHydrate = 25;
@@ -528,6 +541,7 @@ app.get('/dashboard', (req, res) => {
       }
       const canShowImg = typeof imgUrl === 'string' && (imgUrl.startsWith('http') || imgUrl.startsWith('data:image'));
       const id = item && item.id ? String(item.id) : '';
+      if (id) captureAtById.set(id, item && item.timestamp ? item.timestamp : null);
       const fields = [
         ['Fecha', formatDateTime(item.timestamp)],
         ['Tipo', toText(item.vehicle_type)],
@@ -554,7 +568,7 @@ app.get('/dashboard', (req, res) => {
       if (id && existingGetApi) {
         const payload = { success: true, data: existingGetApi, cached: true };
         enrichCache.set(id, payload);
-        moreInner = renderMoreData(payload);
+        moreInner = renderMoreData(payload, captureAtById.get(id));
       }
 
       const initialInfo = id
@@ -573,7 +587,7 @@ app.get('/dashboard', (req, res) => {
       }
     }
 
-    function renderMoreData(payload) {
+    function renderMoreData(payload, captureAt) {
       const data = payload && payload.data ? payload.data : null;
       if (!data) {
         const plate = payload && typeof payload.plate === 'string' ? payload.plate : null;
@@ -602,24 +616,79 @@ app.get('/dashboard', (req, res) => {
       const vehicle = data.vehicle || null;
       const appraisal = data.appraisal || null;
 
-      const rows = [];
-      rows.push(['Patente', data.plate || '—']);
-      rows.push(['Marca', vehicle?.brand?.name || vehicle?.brand || '—']);
-      rows.push(['Modelo', vehicle?.model?.name || vehicle?.model || '—']);
-      rows.push(['Año', vehicle?.year || '—']);
-      rows.push(['Color', vehicle?.color || vehicle?.model?.color || '—']);
-      rows.push(['VIN', vehicle?.vinNumber || vehicle?.vin || '—']);
-      rows.push(['N° Motor', vehicle?.engineNumber || '—']);
-      rows.push(['Transmisión', vehicle?.transmission || '—']);
-      rows.push(['Puertas', vehicle?.doors || '—']);
-      rows.push(['RT Mes', vehicle?.monthRT || '—']);
-      rows.push(['RT Vence', vehicle?.rtDate && vehicle?.rtDate !== '0000-00-00 00:00:00' ? formatDateTime(vehicle.rtDate) : '—']);
-      rows.push(['RT Resultado', vehicle?.rtResult || '—']);
-      rows.push(['RT Gas', vehicle?.rtResultGas || '—']);
-      rows.push(['Tasación usado', appraisal?.precioUsado?.precio ? formatMoney(appraisal.precioUsado.precio) : '—']);
-      rows.push(['Tasación retoma', appraisal?.precioRetoma ? formatMoney(appraisal.precioRetoma) : '—']);
-      const htmlRows = rows.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(toText(v))}</div></div>\`).join('');
-      return \`<div class="moreTitle">Información vehículo</div>\${htmlRows}\`;
+      const brand =
+        vehicle?.brand?.name ||
+        vehicle?.brand ||
+        vehicle?.model?.brand?.name ||
+        vehicle?.model?.brand ||
+        '—';
+      const model =
+        vehicle?.version ||
+        vehicle?.model?.name ||
+        vehicle?.model ||
+        '—';
+      const typeVehicle =
+        vehicle?.model?.typeVehicle?.name ||
+        vehicle?.typeVehicle?.name ||
+        vehicle?.typeVehicle ||
+        '—';
+
+      const rtPlantName =
+        vehicle?.rtPlant?.name ||
+        vehicle?.rtPlantName ||
+        vehicle?.plantaRevisora ||
+        vehicle?.rtStation?.name ||
+        vehicle?.rtStationName ||
+        vehicle?.rtCompany ||
+        null;
+      const rtPlantLocation =
+        vehicle?.rtPlant?.location ||
+        vehicle?.rtPlant?.address ||
+        vehicle?.rtPlantAddress ||
+        vehicle?.rtLocation ||
+        vehicle?.rtCommune ||
+        null;
+      const rtPlantHtml = [rtPlantName, rtPlantLocation].filter(Boolean).map((t) => safeHtml(String(t))).join('<br>');
+
+      const infoRows = [];
+      infoRows.push(['Horario de captura', captureAt ? formatDateTime(captureAt) : '—']);
+      infoRows.push(['Marca', brand]);
+      infoRows.push(['Modelo', model]);
+      infoRows.push(['Año', vehicle?.year || '—']);
+      infoRows.push(['Tipo', typeVehicle]);
+      infoRows.push(['Combustible', vehicle?.fuel || '—']);
+      infoRows.push(['Color', vehicle?.color || vehicle?.model?.color || '—']);
+      infoRows.push(['VIN', vehicle?.vinNumber || vehicle?.vin || '—']);
+      infoRows.push(['N° Motor', vehicle?.engineNumber || '—']);
+      infoRows.push(['Transmisión', vehicle?.transmission || '—']);
+
+      const rtRows = [];
+      rtRows.push(['Mes', vehicle?.monthRT || '—']);
+      rtRows.push(['Fecha Vencimiento', vehicle?.rtDate && vehicle?.rtDate !== '0000-00-00 00:00:00' ? formatDateOnly(vehicle.rtDate) : '—']);
+      rtRows.push(['Resultado', vehicle?.rtResult || '—']);
+      rtRows.push(['Resultado Gases', vehicle?.rtResultGas || '—']);
+      rtRows.push(['Planta Revisora', rtPlantHtml || '—', true]);
+
+      const appraisalMin = appraisal?.precioUsado?.banda_min;
+      const appraisalMax = appraisal?.precioUsado?.banda_max;
+      const appraisalRange = (Number.isFinite(Number(appraisalMin)) && Number.isFinite(Number(appraisalMax)))
+        ? \`\${formatMoney(appraisalMin)} - \${formatMoney(appraisalMax)}\`
+        : '—';
+
+      const appraisalRows = [];
+      appraisalRows.push(['Precio Usado', appraisal?.precioUsado?.precio ? formatMoney(appraisal.precioUsado.precio) : '—']);
+      appraisalRows.push(['Rango', appraisalRange]);
+      appraisalRows.push(['Precio Retoma', appraisal?.precioRetoma ? formatMoney(appraisal.precioRetoma) : '—']);
+
+      const renderRows = (rows) => rows.map(([k, v, isHtml]) => {
+        if (isHtml) return \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${String(v || '—')}</div></div>\`;
+        return \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(toText(v))}</div></div>\`;
+      }).join('');
+
+      const infoHtml = \`<div class="moreTitle">Información del Vehículo</div>\${renderRows(infoRows)}\`;
+      const rtHtml = \`<div class="moreTitle">Revisión Técnica</div>\${renderRows(rtRows)}\`;
+      const appraisalHtml = \`<div class="moreTitle">Tasación</div>\${renderRows(appraisalRows)}\`;
+      return \`\${infoHtml}\${rtHtml}\${appraisalHtml}\`;
     }
 
     function setMoreBoxHtml(id, html) {
@@ -644,7 +713,7 @@ app.get('/dashboard', (req, res) => {
       if (!id) return;
       if (isSuccessfulGetApiPayload(payload)) {
         enrichRetry.delete(id);
-        setMoreBoxHtml(id, renderMoreData(payload));
+        setMoreBoxHtml(id, renderMoreData(payload, captureAtById.get(id)));
         return;
       }
 
@@ -652,7 +721,7 @@ app.get('/dashboard', (req, res) => {
         getApiCooldownUntilMs = Math.max(getApiCooldownUntilMs, Date.now() + 60000);
         const attempt = (enrichRetry.get(id)?.attempts || 0) + 1;
         enrichRetry.set(id, { attempts: attempt, nextAtMs: Date.now() + nextRetryDelayMs(attempt, payload) });
-        setMoreBoxHtml(id, renderMoreData(payload || { success: true, data: null }));
+        setMoreBoxHtml(id, renderMoreData(payload || { success: true, data: null }, captureAtById.get(id)));
         return;
       }
 
