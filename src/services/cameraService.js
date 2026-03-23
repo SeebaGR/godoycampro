@@ -206,6 +206,8 @@ class CameraService {
         obj?.Picture?.content,
         obj?.Picture?.PicData,
         obj?.Picture?.picData,
+        obj?.Picture?.CutoutPic?.Content,
+        obj?.Picture?.CutoutPic?.content,
         obj?.Picture?.NormalPic?.Content,
         obj?.Picture?.NormalPic?.content,
         obj?.Picture?.VehiclePic?.Content,
@@ -235,6 +237,12 @@ class CameraService {
           const b64 = tryFromObject(parsed);
           if (b64) return b64;
         }
+      }
+
+      const nestedObjects = [obj.__rawObject, obj.__raw_object, obj.rawObject, obj.raw_object];
+      for (const v of nestedObjects) {
+        const b64 = tryFromObject(v);
+        if (b64) return b64;
       }
 
       return null;
@@ -317,6 +325,8 @@ class CameraService {
       if (!obj || typeof obj !== 'object') return obj;
       const pic = obj.Picture;
       if (pic && typeof pic === 'object') {
+        if (pic.CutoutPic && typeof pic.CutoutPic === 'object' && typeof pic.CutoutPic.Content === 'string') pic.CutoutPic.Content = null;
+        if (pic.CutoutPic && typeof pic.CutoutPic === 'object' && typeof pic.CutoutPic.content === 'string') pic.CutoutPic.content = null;
         if (pic.NormalPic && typeof pic.NormalPic === 'object' && typeof pic.NormalPic.Content === 'string') pic.NormalPic.Content = null;
         if (pic.VehiclePic && typeof pic.VehiclePic === 'object' && typeof pic.VehiclePic.Content === 'string') pic.VehiclePic.Content = null;
         if (pic.NormalPic && typeof pic.NormalPic === 'object' && typeof pic.NormalPic.content === 'string') pic.NormalPic.content = null;
@@ -330,6 +340,9 @@ class CameraService {
     if (!payload || typeof payload !== 'object') return payload;
     const cloned = tryClone(payload);
     redactInObject(cloned);
+    if (cloned && typeof cloned === 'object' && cloned.__rawObject && typeof cloned.__rawObject === 'object') {
+      redactInObject(cloned.__rawObject);
+    }
 
     if (cloned && typeof cloned === 'object' && typeof cloned.__raw === 'string') {
       const parsed = parseMaybeJson(cloned.__raw);
