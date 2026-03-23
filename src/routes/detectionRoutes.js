@@ -6,6 +6,8 @@ const { createPlateDedupeGate } = require('../services/plateDedupeGate');
 
 const detectionsCache = new Map();
 const plateGate = createPlateDedupeGate();
+let lastDetectionsOk = null;
+let lastDetectionsOkAt = 0;
 
 router.get('/assets/:id', async (req, res) => {
   try {
@@ -45,7 +47,7 @@ router.post('/webhook/detection', async (req, res) => {
   try {
     const logPayload = process.env.LOG_DETECTION_PAYLOAD === '1' || process.env.LOG_DETECTION_PAYLOAD === 'true';
     const logMax = Number.parseInt(process.env.LOG_DETECTION_PAYLOAD_MAX ?? '8000', 10) || 8000;
-    const dedupeSeconds = Number.parseInt(process.env.DEDUPE_WINDOW_SECONDS ?? '900', 10) || 900;
+    const dedupeSeconds = Number.parseInt((process.env.DEDUPE_WINDOW_SECONDS ?? process.env.EVENT_DEDUPE_WINDOW_SECONDS ?? '900'), 10) || 900;
 
     const safeStringify = (value) => {
       try {
@@ -245,6 +247,8 @@ router.get('/detections', async (req, res) => {
     if (cacheMs > 0) {
       detectionsCache.set(cacheKey, { expiresAt: Date.now() + cacheMs, payload });
     }
+    lastDetectionsOk = payload;
+    lastDetectionsOkAt = Date.now();
     return res.json(payload);
 
   } catch (error) {
@@ -256,10 +260,28 @@ router.get('/detections', async (req, res) => {
     });
     const retryAfterMs = Number.parseInt(process.env.DETECTIONS_RETRY_AFTER_MS ?? '5000', 10) || 5000;
     res.setHeader('Retry-After', String(Math.max(1, Math.round(retryAfterMs / 1000))));
-    res.status(502).json({ 
-      success: false, 
+    const staleMaxMs = Number.parseInt(process.env.DETECTIONS_STALE_MAX_MS ?? '60000', 10) || 60000;
+    if (lastDetectionsOk && (Date.now() - lastDetectionsOkAt) <= Math.max(0, staleMaxMs)) {
+      res.setHeader('X-Data-Stale', '1');
+      return res.status(200).json({
+        ...lastDetectionsOk,
+        stale: true,
+        upstream_error: {
+          message: error?.message || 'Error consultando Directus',
+          status: error?.status ?? null
+        }
+      });
+    }
+
+    res.status(502).json({
+      success: false,
       error: error?.message || 'Error consultando Directus',
-      retry_after_ms: retryAfterMs
+      retry_after_ms: retryAfterMs,
+      upstream: {
+        status: error?.status ?? null,
+        method: error?.method ?? null,
+        url: typeof error?.url === 'string' ? error.url.replace(/(Bearer\\s+)[^\\s]+/gi, '$1***') : null
+      }
     });
   }
 });

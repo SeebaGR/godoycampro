@@ -202,11 +202,25 @@ class CameraService {
       if (!obj || typeof obj !== 'object') return null;
 
       const directCandidates = [
+        obj?.Picture?.Content,
+        obj?.Picture?.content,
+        obj?.Picture?.PicData,
+        obj?.Picture?.picData,
         obj?.Picture?.NormalPic?.Content,
         obj?.Picture?.NormalPic?.content,
         obj?.Picture?.VehiclePic?.Content,
         obj?.Picture?.VehiclePic?.content,
+        obj?.Picture?.TrafficCar?.VehiclePic?.Content,
+        obj?.Picture?.TrafficCar?.VehiclePic?.content,
+        obj?.Picture?.TrafficCar?.NormalPic?.Content,
+        obj?.Picture?.TrafficCar?.NormalPic?.content,
+        obj?.PicData,
+        obj?.picData,
+        obj?.ImageData,
+        obj?.imageData,
+        obj?.NormalPic?.content,
         obj?.NormalPic?.Content,
+        obj?.VehiclePic?.content,
         obj?.VehiclePic?.Content
       ];
       for (const c of directCandidates) {

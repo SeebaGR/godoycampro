@@ -77,8 +77,8 @@ async function directusRequest(method, path, { query, body, headers } = {}) {
   const init = { method, headers: reqHeaders };
   if (body !== undefined) init.body = body;
 
-  const timeoutMs = Number.parseInt(process.env.DIRECTUS_TIMEOUT_MS ?? '8000', 10) || 8000;
-  const maxRetries = Number.parseInt(process.env.DIRECTUS_MAX_RETRIES ?? '2', 10) || 2;
+  const timeoutMs = Number.parseInt(process.env.DIRECTUS_TIMEOUT_MS ?? '20000', 10) || 20000;
+  const maxRetries = Number.parseInt(process.env.DIRECTUS_MAX_RETRIES ?? '3', 10) || 3;
   const retryableStatus = new Set([429, 502, 503, 504]);
 
   let lastError = null;
