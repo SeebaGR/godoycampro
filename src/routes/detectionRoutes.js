@@ -97,12 +97,29 @@ function absolutizePublicUrl(pathOrUrl) {
 async function fetchGetApiJson(path) {
   const base = (process.env.GETAPI_BASE_URL || 'https://chile.getapi.cl').trim().replace(/\/+$/, '');
   const key = getGetApiKey();
-  if (!key) return { ok: false, status: 401, data: null };
+  if (!key) return { ok: false, status: 401, data: null, reason: 'missing_getapi_key', message: 'Falta GETAPI_API_KEY' };
   const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
   const res = await fetch(url, { headers: { 'X-Api-Key': key, Accept: 'application/json' } });
-  if (!res.ok) return { ok: false, status: res.status, data: null };
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    const parsed = safeJsonParse(text);
+    const msg =
+      parsed?.data?.message ||
+      parsed?.message ||
+      parsed?.error?.message ||
+      (typeof text === 'string' && text.trim()) ||
+      `HTTP ${res.status}`;
+    const reason =
+      res.status === 429 ? 'rate_limited' :
+      res.status === 404 ? 'not_found' :
+      res.status === 422 ? 'invalid_plate' :
+      res.status === 401 ? 'unauthorized' :
+      res.status === 403 ? 'forbidden' :
+      'upstream_error';
+    return { ok: false, status: res.status, data: null, reason, message: msg };
+  }
   const json = await res.json().catch(() => null);
-  return { ok: true, status: res.status, data: json };
+  return { ok: true, status: res.status, data: json, reason: null, message: null };
 }
 
 router.get('/assets/:id', async (req, res) => {
@@ -425,12 +442,20 @@ router.get('/detections/:id/enrich', async (req, res) => {
     }
 
     if (!plate) {
-      return res.json({ success: true, data: null, cached: false });
+      return res.json({ success: true, data: null, cached: false, reason: 'no_plate' });
     }
 
     const vehicleRes = await fetchGetApiJson(`/v1/vehicles/plate/${encodeURIComponent(plate)}`);
     if (!vehicleRes.ok) {
-      return res.json({ success: true, data: null, cached: false, plate, upstream_status: vehicleRes.status });
+      return res.json({
+        success: true,
+        data: null,
+        cached: false,
+        plate,
+        upstream_status: vehicleRes.status,
+        reason: vehicleRes.reason || null,
+        message: vehicleRes.message || null
+      });
     }
 
     const vehiclePayload = vehicleRes.data;
@@ -465,7 +490,7 @@ router.get('/detections/:id/enrich', async (req, res) => {
 
     return res.json({ success: true, data: result, cached: false });
   } catch (e) {
-    return res.json({ success: true, data: null, cached: false });
+    return res.json({ success: true, data: null, cached: false, reason: 'internal_error' });
   }
 });
 

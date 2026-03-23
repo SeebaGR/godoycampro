@@ -508,7 +508,30 @@ app.get('/dashboard', (req, res) => {
 
     function renderMoreData(payload) {
       const data = payload && payload.data ? payload.data : null;
-      if (!data) return '<div class="moreTitle">Sin información</div>';
+      if (!data) {
+        const plate = payload && typeof payload.plate === 'string' ? payload.plate : null;
+        const upstream = payload && (payload.upstream_status || payload.status) ? (payload.upstream_status || payload.status) : null;
+        const reason = payload && typeof payload.reason === 'string' ? payload.reason : null;
+        const message = payload && typeof payload.message === 'string' ? payload.message : null;
+
+        let hint = 'No se pudo obtener información.';
+        if (reason === 'missing_getapi_key' || upstream === 401) {
+          hint = 'Falta configurar GETAPI_API_KEY en EasyPanel.';
+        } else if (reason === 'rate_limited' || upstream === 429) {
+          hint = 'GetAPI sin solicitudes (rate limit). Intenta más tarde.';
+        } else if (reason === 'not_found' || upstream === 404) {
+          hint = 'GetAPI no encontró la patente.';
+        } else if (reason === 'invalid_plate' || upstream === 422) {
+          hint = 'Formato de patente inválido.';
+        } else if (reason === 'no_plate') {
+          hint = 'No hay patente para consultar.';
+        }
+
+        const extra = message ? (' · ' + message) : '';
+        const plateRow = plate ? `<div class="row"><div class="k">Patente</div><div class="v">${safeHtml(plate)}</div></div>` : '';
+        const upRow = upstream ? `<div class="row"><div class="k">Estado</div><div class="v">${safeHtml(String(upstream))}</div></div>` : '';
+        return `<div class="moreTitle">Sin información</div>${plateRow}${upRow}<div class="row"><div class="k">Detalle</div><div class="v">${safeHtml(hint + extra)}</div></div>`;
+      }
       const vehicle = data.vehicle || null;
       const appraisal = data.appraisal || null;
 
@@ -660,7 +683,9 @@ app.get('/dashboard', (req, res) => {
       if (!box.getAttribute('data-loaded')) {
         const payload = await fetchMore(id).catch(() => ({ success: true, data: null }));
         box.innerHTML = renderMoreData(payload);
-        box.setAttribute('data-loaded', '1');
+        if (payload && payload.data) {
+          box.setAttribute('data-loaded', '1');
+        }
       }
       btn.textContent = 'Ocultar';
     });
