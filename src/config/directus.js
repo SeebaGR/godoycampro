@@ -133,7 +133,7 @@ async function directusRequest(method, path, { query, body, headers } = {}) {
 async function listDetections({ page, limit, license_plate, start_date, end_date } = {}) {
   const { collection } = getDirectusConfig();
   const safePage = Math.max(1, Number.parseInt(page ?? '1', 10) || 1);
-  const safeLimit = Math.min(100, Math.max(1, Number.parseInt(limit ?? '50', 10) || 50));
+  const safeLimit = Math.min(100, Math.max(1, Number.parseInt(limit ?? '25', 10) || 25));
   const offset = (safePage - 1) * safeLimit;
 
   const query = {

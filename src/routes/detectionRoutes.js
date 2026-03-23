@@ -222,7 +222,7 @@ router.get('/detections', async (req, res) => {
     const basePollMs = Math.min(maxPollMs, Math.max(minPollMs, cacheMs));
     const cacheKey = JSON.stringify({
       page: rawPage ?? '1',
-      limit: rawLimit ?? '50',
+      limit: rawLimit ?? '25',
       license_plate: license_plate || '',
       start_date: start_date || '',
       end_date: end_date || ''
@@ -235,7 +235,7 @@ router.get('/detections', async (req, res) => {
     const startedAt = Date.now();
     const result = await directus.listDetections({
       page: rawPage ?? '1',
-      limit: rawLimit ?? '50',
+      limit: rawLimit ?? '25',
       license_plate,
       start_date,
       end_date

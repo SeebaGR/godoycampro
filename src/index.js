@@ -366,6 +366,7 @@ app.get('/dashboard', (req, res) => {
     .empty { padding: 18px; opacity: .75; border: 1px dashed rgba(127,127,127,.35); border-radius: 12px; }
     button { border: 1px solid rgba(127,127,127,.35); background: transparent; padding: 6px 10px; border-radius: 10px; cursor: pointer; }
     button:active { transform: translateY(1px); }
+    select { border: 1px solid rgba(127,127,127,.35); background: transparent; padding: 6px 10px; border-radius: 10px; cursor: pointer; }
     code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 11px; }
   </style>
 </head>
@@ -379,6 +380,10 @@ app.get('/dashboard', (req, res) => {
       <button id="prevPage">◀</button>
       <span id="pageInfo" class="pill">Página 1</span>
       <button id="nextPage">▶</button>
+      <select id="pageSize" aria-label="Tamaño de página">
+        <option value="25">25</option>
+        <option value="50">50</option>
+      </select>
       <button id="refresh">Actualizar</button>
     </div>
   </header>
@@ -395,14 +400,23 @@ app.get('/dashboard', (req, res) => {
     const prevPageBtn = document.getElementById('prevPage');
     const nextPageBtn = document.getElementById('nextPage');
     const pageInfoEl = document.getElementById('pageInfo');
+    const pageSizeEl = document.getElementById('pageSize');
     let lastKey = null;
     let currentPage = 1;
-    const pageLimit = 50;
+    let pageLimit = 25;
     let hasMore = false;
     let isRefreshing = false;
     let pollMs = 2500;
     let timerId = null;
     const displayTimeZone = ${JSON.stringify(process.env.CAMERA_TIMEZONE || 'America/Santiago')};
+    const allowedPageSizes = new Set([25, 50]);
+
+    try {
+      const stored = Number.parseInt(localStorage.getItem('pageLimit') || '', 10);
+      if (allowedPageSizes.has(stored)) pageLimit = stored;
+    } catch {
+    }
+    if (pageSizeEl) pageSizeEl.value = String(pageLimit);
 
     function clampPoll(value) {
       const n = Number(value);
@@ -442,11 +456,18 @@ app.get('/dashboard', (req, res) => {
     function renderCard(item) {
       const plate = item.license_plate || 'Sin patente';
       const title = safeHtml(plate);
-      const rawImgUrl = item.image_url;
-      let imgUrl = typeof rawImgUrl === 'string' ? rawImgUrl : null;
+      const rawImgUrl = item.image_url ?? item.image ?? null;
+      let imgUrl = typeof rawImgUrl === 'string' ? rawImgUrl.trim() : null;
+      if (!imgUrl && rawImgUrl && typeof rawImgUrl === 'object') {
+        const id = rawImgUrl.id ?? rawImgUrl?.data?.id ?? null;
+        if (typeof id === 'string' && id.trim()) imgUrl = id.trim();
+      }
+
       const match = imgUrl ? imgUrl.match(/\\/assets\\/([0-9a-fA-F-]{36})/) : null;
       if (match && match[1]) {
         imgUrl = new URL('/api/assets/' + match[1], window.location.origin).toString();
+      } else if (imgUrl && /^[0-9a-fA-F-]{36}$/.test(imgUrl)) {
+        imgUrl = new URL('/api/assets/' + imgUrl, window.location.origin).toString();
       } else if (imgUrl && imgUrl.startsWith('/')) {
         imgUrl = new URL(imgUrl, window.location.origin).toString();
       }
@@ -526,7 +547,7 @@ app.get('/dashboard', (req, res) => {
         const items = (payload && payload.data) ? payload.data : [];
         pollMs = clampPoll(payload && payload.poll_after_ms);
         hasMore = Boolean(payload && payload.pagination && payload.pagination.hasMore);
-        pageInfoEl.textContent = 'Página ' + currentPage;
+        pageInfoEl.textContent = 'Página ' + currentPage + ' · ' + pageLimit;
         prevPageBtn.disabled = currentPage <= 1;
         nextPageBtn.disabled = !hasMore;
 
@@ -570,6 +591,19 @@ app.get('/dashboard', (req, res) => {
       setPage(currentPage + 1);
       refresh();
     });
+    if (pageSizeEl) {
+      pageSizeEl.addEventListener('change', () => {
+        const next = Number.parseInt(pageSizeEl.value || '', 10);
+        if (!allowedPageSizes.has(next)) return;
+        pageLimit = next;
+        try {
+          localStorage.setItem('pageLimit', String(pageLimit));
+        } catch {
+        }
+        setPage(1);
+        refresh();
+      });
+    }
     refresh();
   </script>
 </body>
