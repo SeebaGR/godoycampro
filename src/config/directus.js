@@ -153,12 +153,20 @@ async function listDetections({ page, limit, license_plate, start_date, end_date
 
   let payload;
   try {
-    payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: withFields });
+    const allFields = { ...baseQuery, fields: '*' };
+    payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: allFields });
   } catch (e) {
     const status = e?.status ?? null;
-    const retryWithoutFields = status === 400 || status === 403;
-    if (!retryWithoutFields) throw e;
-    payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: baseQuery });
+    const retrySpecific = status === 400 || status === 403;
+    if (!retrySpecific) throw e;
+    try {
+      payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: withFields });
+    } catch (e2) {
+      const status2 = e2?.status ?? null;
+      const retryWithoutFields = status2 === 400 || status2 === 403;
+      if (!retryWithoutFields) throw e2;
+      payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: baseQuery });
+    }
   }
   const items = Array.isArray(payload?.data) ? payload.data : [];
   const hasMore = items.length > safeLimit;
