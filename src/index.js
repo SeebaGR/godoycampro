@@ -528,9 +528,9 @@ app.get('/dashboard', (req, res) => {
         }
 
         const extra = message ? (' · ' + message) : '';
-        const plateRow = plate ? `<div class="row"><div class="k">Patente</div><div class="v">${safeHtml(plate)}</div></div>` : '';
-        const upRow = upstream ? `<div class="row"><div class="k">Estado</div><div class="v">${safeHtml(String(upstream))}</div></div>` : '';
-        return `<div class="moreTitle">Sin información</div>${plateRow}${upRow}<div class="row"><div class="k">Detalle</div><div class="v">${safeHtml(hint + extra)}</div></div>`;
+        const plateRow = plate ? `<div class="row"><div class="k">Patente</div><div class="v">\${safeHtml(plate)}</div></div>` : '';
+        const upRow = upstream ? `<div class="row"><div class="k">Estado</div><div class="v">\${safeHtml(String(upstream))}</div></div>` : '';
+        return `<div class="moreTitle">Sin información</div>\${plateRow}\${upRow}<div class="row"><div class="k">Detalle</div><div class="v">\${safeHtml(hint + extra)}</div></div>`;
       }
       const vehicle = data.vehicle || null;
       const appraisal = data.appraisal || null;
