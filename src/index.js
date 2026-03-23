@@ -363,6 +363,11 @@ app.get('/dashboard', (req, res) => {
     .v { word-break: break-word; }
     .img { margin-top: 10px; border-radius: 10px; overflow: hidden; border: 1px solid rgba(127,127,127,.25); }
     .img img { width: 100%; height: auto; display: block; }
+    .actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .more { padding: 6px 10px; border-radius: 999px; }
+    .moreBox { margin-top: 10px; border: 1px solid rgba(127,127,127,.25); border-radius: 12px; padding: 10px; background: rgba(127,127,127,.04); }
+    .moreBox[hidden] { display: none; }
+    .moreTitle { font-weight: 650; font-size: 12px; margin-bottom: 8px; }
     .empty { padding: 18px; opacity: .75; border: 1px dashed rgba(127,127,127,.35); border-radius: 12px; }
     button { border: 1px solid rgba(127,127,127,.35); background: transparent; padding: 6px 10px; border-radius: 10px; cursor: pointer; }
     button:active { transform: translateY(1px); }
@@ -472,6 +477,7 @@ app.get('/dashboard', (req, res) => {
         imgUrl = new URL(imgUrl, window.location.origin).toString();
       }
       const canShowImg = typeof imgUrl === 'string' && (imgUrl.startsWith('http') || imgUrl.startsWith('data:image'));
+      const id = item && item.id ? String(item.id) : '';
       const fields = [
         ['Fecha', formatDateTime(item.timestamp)],
         ['Tipo', toText(item.vehicle_type)],
@@ -485,7 +491,52 @@ app.get('/dashboard', (req, res) => {
 
       const rows = fields.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(v)}</div></div>\`).join('');
       const img = canShowImg ? \`<div class="img"><img src="\${safeHtml(imgUrl)}" alt="snapshot" loading="lazy"></div>\` : '';
-      return \`<div class="card"><h2>\${title}</h2>\${rows}\${img}</div>\`;
+      const actions = id ? \`<div class="actions"><button class="more" data-id="\${safeHtml(id)}" type="button">Ver más</button></div>\` : '';
+      const more = id ? \`<div class="moreBox" id="more-\${safeHtml(id)}" hidden></div>\` : '';
+      return \`<div class="card" data-id="\${safeHtml(id)}"><h2>\${title}</h2>\${rows}\${img}\${actions}\${more}</div>\`;
+    }
+
+    function formatMoney(value) {
+      const n = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(n)) return '—';
+      try {
+        return '$' + n.toLocaleString('es-CL');
+      } catch {
+        return '$' + String(n);
+      }
+    }
+
+    function renderMoreData(payload) {
+      const data = payload && payload.data ? payload.data : null;
+      if (!data) return '<div class="moreTitle">Sin información</div>';
+      const vehicle = data.vehicle || null;
+      const appraisal = data.appraisal || null;
+
+      const rows = [];
+      rows.push(['Patente', data.plate || '—']);
+      rows.push(['Marca', vehicle?.brand?.name || vehicle?.brand || '—']);
+      rows.push(['Modelo', vehicle?.model?.name || vehicle?.model || '—']);
+      rows.push(['Año', vehicle?.year || '—']);
+      rows.push(['Color', vehicle?.color || vehicle?.model?.color || '—']);
+      rows.push(['VIN', vehicle?.vinNumber || vehicle?.vin || '—']);
+      rows.push(['N° Motor', vehicle?.engineNumber || '—']);
+      rows.push(['Transmisión', vehicle?.transmission || '—']);
+      rows.push(['Puertas', vehicle?.doors || '—']);
+      rows.push(['RT Mes', vehicle?.monthRT || '—']);
+      rows.push(['RT Vence', vehicle?.rtDate && vehicle?.rtDate !== '0000-00-00 00:00:00' ? formatDateTime(vehicle.rtDate) : '—']);
+      rows.push(['RT Resultado', vehicle?.rtResult || '—']);
+      rows.push(['RT Gas', vehicle?.rtResultGas || '—']);
+      rows.push(['Tasación usado', appraisal?.precioUsado?.precio ? formatMoney(appraisal.precioUsado.precio) : '—']);
+      rows.push(['Tasación retoma', appraisal?.precioRetoma ? formatMoney(appraisal.precioRetoma) : '—']);
+      const htmlRows = rows.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(toText(v))}</div></div>\`).join('');
+      return \`<div class="moreTitle">Información vehículo</div>\${htmlRows}\`;
+    }
+
+    async function fetchMore(id) {
+      const url = new URL('/api/detections/' + encodeURIComponent(id) + '/enrich', window.location.origin);
+      const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+      if (!res.ok) return { success: true, data: null };
+      return res.json();
     }
 
     function setPage(newPage) {
@@ -590,6 +641,28 @@ app.get('/dashboard', (req, res) => {
       if (!hasMore) return;
       setPage(currentPage + 1);
       refresh();
+    });
+    grid.addEventListener('click', async (ev) => {
+      const btn = ev && ev.target && ev.target.closest ? ev.target.closest('button.more') : null;
+      if (!btn) return;
+      const id = btn.getAttribute('data-id');
+      if (!id) return;
+      const box = document.getElementById('more-' + id);
+      if (!box) return;
+      const isHidden = box.hasAttribute('hidden');
+      if (!isHidden) {
+        box.setAttribute('hidden', '');
+        btn.textContent = 'Ver más';
+        return;
+      }
+      btn.textContent = 'Cargando…';
+      box.removeAttribute('hidden');
+      if (!box.getAttribute('data-loaded')) {
+        const payload = await fetchMore(id).catch(() => ({ success: true, data: null }));
+        box.innerHTML = renderMoreData(payload);
+        box.setAttribute('data-loaded', '1');
+      }
+      btn.textContent = 'Ocultar';
     });
     if (pageSizeEl) {
       pageSizeEl.addEventListener('change', () => {

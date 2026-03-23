@@ -225,6 +225,15 @@ async function createDetection(data) {
   return payload?.data || null;
 }
 
+async function updateDetectionById(id, patch) {
+  const { collection } = getDirectusConfig();
+  const payload = await directusRequest('PATCH', `/items/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`, {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch || {})
+  });
+  return payload?.data || null;
+}
+
 async function uploadImageBytes(bytes, { contentType, filename, title } = {}) {
   const form = new FormData();
   const blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
@@ -248,5 +257,6 @@ module.exports = {
   getLatestByPlate,
   getLatestTimestampByPlate,
   createDetection,
+  updateDetectionById,
   uploadImageBytes
 };

@@ -9,6 +9,102 @@ const plateGate = createPlateDedupeGate();
 let lastDetectionsOk = null;
 let lastDetectionsOkAt = 0;
 
+function safeJsonParse(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  const t = value.trim();
+  if (!t) return null;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return null;
+  }
+}
+
+function cleanPlateText(input) {
+  if (typeof input !== 'string') return null;
+  const cleaned = input.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!cleaned || cleaned.length < 5) return null;
+  const modern = cleaned.match(/[A-Z]{4}\d{2}/);
+  if (modern) return modern[0];
+  const old = cleaned.match(/[A-Z]{2}\d{4}/);
+  if (old) return old[0];
+  if (cleaned.length >= 6) return cleaned.slice(0, 6);
+  return cleaned;
+}
+
+function getGetApiKey() {
+  const v =
+    process.env.GETAPI_API_KEY ||
+    process.env.GETAPI_KEY ||
+    process.env.GETAPI_X_API_KEY ||
+    process.env.X_API_KEY_GETAPI ||
+    '';
+  const t = String(v).trim();
+  return t || null;
+}
+
+async function groqExtractPlateFromImageUrl(imageUrl) {
+  const key = (process.env.GROQ_API_KEY || '').trim();
+  if (!key || !imageUrl) return null;
+  const model = (process.env.GROQ_MODEL || '').trim() || 'meta-llama/llama-4-scout-17b-16e-instruct';
+
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${key}`
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Mira esta imagen de una patente vehicular chilena. Lee EXACTAMENTE los caracteres que ves en la placa. Las patentes chilenas tienen formato: 4 letras + 2 números (ej: LYHR62, BBCD34) o 2 letras + 4 números (ej: AB1234). Distingue letras similares (O vs 0, I vs 1, S vs 5, G vs 6, Z vs 2, Y vs V). Responde SOLO con los caracteres de la patente en mayúsculas, sin espacios, sin puntos, sin guiones.'
+            },
+            { type: 'image_url', image_url: { url: imageUrl } }
+          ]
+        }
+      ],
+      temperature: 0.1,
+      max_completion_tokens: 20,
+      top_p: 1,
+      stream: false
+    })
+  });
+
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  const text = data?.choices?.[0]?.message?.content?.trim?.() || null;
+  return cleanPlateText(text);
+}
+
+function absolutizePublicUrl(pathOrUrl) {
+  if (typeof pathOrUrl !== 'string') return null;
+  const s = pathOrUrl.trim();
+  if (!s) return null;
+  if (s.startsWith('http://') || s.startsWith('https://')) return s;
+  const base = (process.env.PUBLIC_BASE_URL || process.env.APP_URL || process.env.BASE_URL || '').trim().replace(/\/+$/, '');
+  if (!base) return null;
+  if (s.startsWith('/')) return base + s;
+  return base + '/' + s;
+}
+
+async function fetchGetApiJson(path) {
+  const base = (process.env.GETAPI_BASE_URL || 'https://chile.getapi.cl').trim().replace(/\/+$/, '');
+  const key = getGetApiKey();
+  if (!key) return { ok: false, status: 401, data: null };
+  const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+  const res = await fetch(url, { headers: { 'X-Api-Key': key, Accept: 'application/json' } });
+  if (!res.ok) return { ok: false, status: res.status, data: null };
+  const json = await res.json().catch(() => null);
+  return { ok: true, status: res.status, data: json };
+}
+
 router.get('/assets/:id', async (req, res) => {
   try {
     const { baseUrl, token } = directus.getDirectusConfig();
@@ -305,6 +401,71 @@ router.get('/detections/:id', async (req, res) => {
       success: false, 
       error: error.message 
     });
+  }
+});
+
+router.get('/detections/:id/enrich', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ success: false, error: 'id requerido' });
+
+    const item = await directus.getDetectionById(id);
+    if (!item) return res.status(404).json({ success: false, error: 'Detección no encontrada' });
+
+    const rawDataObj = safeJsonParse(item.raw_data) || {};
+    const existing = rawDataObj?.enrichment?.getapi || null;
+    if (existing && typeof existing === 'object' && existing.fetched_at) {
+      return res.json({ success: true, data: existing, cached: true });
+    }
+
+    let plate = cleanPlateText(item.license_plate) || null;
+    if (!plate) {
+      const absImg = absolutizePublicUrl(item.image_url);
+      plate = await groqExtractPlateFromImageUrl(absImg);
+    }
+
+    if (!plate) {
+      return res.json({ success: true, data: null, cached: false });
+    }
+
+    const vehicleRes = await fetchGetApiJson(`/v1/vehicles/plate/${encodeURIComponent(plate)}`);
+    if (!vehicleRes.ok) {
+      return res.json({ success: true, data: null, cached: false, plate, upstream_status: vehicleRes.status });
+    }
+
+    const vehiclePayload = vehicleRes.data;
+    const vehicleData = (vehiclePayload && typeof vehiclePayload === 'object' && vehiclePayload.data) ? vehiclePayload.data : vehiclePayload;
+    if (vehicleData?.model?.brand && !vehicleData.brand) {
+      vehicleData.brand = vehicleData.model.brand;
+    }
+
+    const appraisalRes = await fetchGetApiJson(`/v1/vehicles/appraisal/${encodeURIComponent(plate)}`);
+    const appraisalPayload = appraisalRes.ok ? appraisalRes.data : null;
+    const appraisalData = appraisalPayload?.data || null;
+
+    const result = {
+      plate,
+      fetched_at: new Date().toISOString(),
+      vehicle: vehicleData || null,
+      appraisal: appraisalData || null
+    };
+
+    const nextRaw = {
+      ...rawDataObj,
+      enrichment: {
+        ...(rawDataObj.enrichment && typeof rawDataObj.enrichment === 'object' ? rawDataObj.enrichment : {}),
+        getapi: result
+      }
+    };
+
+    try {
+      await directus.updateDetectionById(id, { raw_data: nextRaw });
+    } catch {
+    }
+
+    return res.json({ success: true, data: result, cached: false });
+  } catch (e) {
+    return res.json({ success: true, data: null, cached: false });
   }
 });
 
