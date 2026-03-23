@@ -356,7 +356,13 @@ router.get('/detections', async (req, res) => {
     const elapsedMs = Date.now() - startedAt;
     const pollAfterMs = Math.min(maxPollMs, Math.max(basePollMs, Math.round(elapsedMs * 1.25)));
 
-    const payload = { success: true, data: result.data, pagination: result.pagination, poll_after_ms: pollAfterMs };
+    const dataWithGetApi = (Array.isArray(result.data) ? result.data : []).map((item) => {
+      const rawObj = safeJsonParse(item?.raw_data) || null;
+      const getapi = rawObj?.enrichment?.getapi || null;
+      return { ...(item || {}), getapi };
+    });
+
+    const payload = { success: true, data: dataWithGetApi, pagination: result.pagination, poll_after_ms: pollAfterMs };
     if (cacheMs > 0) {
       detectionsCache.set(cacheKey, { expiresAt: Date.now() + cacheMs, payload });
     }
@@ -485,7 +491,12 @@ router.get('/detections/:id/enrich', async (req, res) => {
 
     try {
       await directus.updateDetectionById(id, { raw_data: nextRaw });
-    } catch {
+    } catch (e) {
+      try {
+        await directus.updateDetectionById(id, { raw_data: JSON.stringify(nextRaw) });
+      } catch (e2) {
+        console.warn('No se pudo persistir enrichment.getapi en raw_data:', e2?.message || e2);
+      }
     }
 
     return res.json({ success: true, data: result, cached: false });

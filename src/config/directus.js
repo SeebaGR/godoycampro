@@ -139,7 +139,8 @@ async function listDetections({ page, limit, license_plate, start_date, end_date
   const query = {
     limit: safeLimit + 1,
     offset,
-    sort: '-timestamp,-id'
+    sort: '-timestamp,-id',
+    fields: 'id,timestamp,license_plate,vehicle_type,vehicle_color,speed,direction,confidence,camera_id,location,image_url,image,raw_data'
   };
 
   if (license_plate) query['filter[license_plate][_contains]'] = String(license_plate);

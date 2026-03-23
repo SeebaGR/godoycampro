@@ -544,8 +544,9 @@ app.get('/dashboard', (req, res) => {
 
       let existingGetApi = null;
       if (id) {
-        const rawObj = safeJsonParse(item && (item.raw_data ?? null));
-        const existing = rawObj && rawObj.enrichment && rawObj.enrichment.getapi ? rawObj.enrichment.getapi : null;
+        const fromField = item && item.getapi ? item.getapi : null;
+        const rawObj = fromField ? null : safeJsonParse(item && (item.raw_data ?? null));
+        const existing = fromField || (rawObj && rawObj.enrichment && rawObj.enrichment.getapi ? rawObj.enrichment.getapi : null);
         if (existing && typeof existing === 'object' && existing.fetched_at) {
           existingGetApi = existing;
         }
