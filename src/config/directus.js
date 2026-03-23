@@ -136,18 +136,30 @@ async function listDetections({ page, limit, license_plate, start_date, end_date
   const safeLimit = Math.min(100, Math.max(1, Number.parseInt(limit ?? '25', 10) || 25));
   const offset = (safePage - 1) * safeLimit;
 
-  const query = {
+  const baseQuery = {
     limit: safeLimit + 1,
     offset,
-    sort: '-timestamp,-id',
-    fields: 'id,timestamp,license_plate,vehicle_type,vehicle_color,speed,direction,confidence,camera_id,location,image_url,image,raw_data'
+    sort: '-timestamp,-id'
   };
 
-  if (license_plate) query['filter[license_plate][_contains]'] = String(license_plate);
-  if (start_date) query['filter[timestamp][_gte]'] = String(start_date);
-  if (end_date) query['filter[timestamp][_lte]'] = String(end_date);
+  if (license_plate) baseQuery['filter[license_plate][_contains]'] = String(license_plate);
+  if (start_date) baseQuery['filter[timestamp][_gte]'] = String(start_date);
+  if (end_date) baseQuery['filter[timestamp][_lte]'] = String(end_date);
 
-  const payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query });
+  const withFields = {
+    ...baseQuery,
+    fields: 'id,timestamp,license_plate,vehicle_type,vehicle_color,speed,direction,confidence,camera_id,location,image_url,raw_data'
+  };
+
+  let payload;
+  try {
+    payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: withFields });
+  } catch (e) {
+    const status = e?.status ?? null;
+    const retryWithoutFields = status === 400 || status === 403;
+    if (!retryWithoutFields) throw e;
+    payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: baseQuery });
+  }
   const items = Array.isArray(payload?.data) ? payload.data : [];
   const hasMore = items.length > safeLimit;
   const sliced = hasMore ? items.slice(0, safeLimit) : items;
