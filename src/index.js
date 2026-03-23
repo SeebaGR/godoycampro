@@ -8,6 +8,18 @@ const { createPlateDedupeGate } = require('./services/plateDedupeGate');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || process.env.APP_URL || process.env.BASE_URL || '').trim().replace(/\/+$/, '');
+
+function safeOrigin(url) {
+  if (typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return null;
+  }
+}
 
 const isapiStatus = {
   keepAlive: { count: 0, lastAt: null, lastPath: null },
@@ -565,10 +577,21 @@ app.get('/dashboard', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  const cfg = directus.getDirectusConfig();
+  res.json({
+    status: 'ok',
     timestamp: new Date().toISOString(),
-    message: 'API lista para recibir detecciones de la cámara DAHUA'
+    message: 'API lista para recibir detecciones de la cámara DAHUA',
+    directus: {
+      configured: Boolean(cfg?.baseUrl),
+      base_origin: safeOrigin(cfg?.baseUrl),
+      collection: cfg?.collection || null,
+      has_token: Boolean(cfg?.token)
+    },
+    app: {
+      node_env: process.env.NODE_ENV || null,
+      public_base_url: PUBLIC_BASE_URL || null
+    }
   });
 });
 
@@ -589,8 +612,17 @@ app.get('/test', (req, res) => {
 });
 
 app.listen(PORT, () => {
+  const cfg = directus.getDirectusConfig();
+  if (!cfg?.baseUrl) {
+    console.warn('⚠️ DIRECTUS_URL no está configurado. La API levantará, pero no podrá guardar detecciones.');
+  }
+  if (!cfg?.token) {
+    console.warn('⚠️ DIRECTUS_TOKEN no está configurado. Assets y carga de imágenes pueden fallar.');
+  }
+
+  const base = PUBLIC_BASE_URL || `http://localhost:${PORT}`;
   console.log(`\n🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log(`📡 Webhook URL: http://localhost:${PORT}/api/webhook/detection`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
+  console.log(`📡 Webhook URL: ${base}/api/webhook/detection`);
+  console.log(`📊 Health check: ${base}/health`);
   console.log(`\n✅ Listo para recibir detecciones de la cámara DAHUA\n`);
 });
