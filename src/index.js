@@ -367,7 +367,9 @@ app.get('/dashboard', (req, res) => {
     .more { padding: 6px 10px; border-radius: 999px; }
     .moreBox { margin-top: 10px; border: 1px solid rgba(127,127,127,.25); border-radius: 12px; padding: 10px; background: rgba(127,127,127,.04); }
     .moreBox[hidden] { display: none; }
-    .moreTitle { font-weight: 650; font-size: 12px; margin-bottom: 8px; }
+    .section + .section { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(127,127,127,.25); }
+    .moreTitle { font-weight: 650; font-size: 12px; margin-bottom: 8px; color: rgba(78, 160, 255, 1); }
+    .row + .row { margin-top: 2px; }
     .empty { padding: 18px; opacity: .75; border: 1px dashed rgba(127,127,127,.35); border-radius: 12px; }
     button { border: 1px solid rgba(127,127,127,.35); background: transparent; padding: 6px 10px; border-radius: 10px; cursor: pointer; }
     button:active { transform: translateY(1px); }
@@ -564,7 +566,7 @@ app.get('/dashboard', (req, res) => {
         if (fromField && typeof fromField === 'object' && fromField.fetched_at) existingGetApi = fromField;
       }
 
-      let moreInner = \`<div class="moreTitle">Información vehículo</div><div class="row"><div class="k">Estado</div><div class="v">Cargando…</div></div>\`;
+      let moreInner = \`<div class="section"><div class="moreTitle">Información del Vehículo</div><div class="row"><div class="k">Estado</div><div class="v">Cargando…</div></div></div>\`;
       if (id && existingGetApi) {
         const payload = { success: true, data: existingGetApi, cached: true };
         enrichCache.set(id, payload);
@@ -573,7 +575,7 @@ app.get('/dashboard', (req, res) => {
 
       const initialInfo = id
         ? \`<div class="moreBox" id="more-\${safeHtml(id)}">\${moreInner}</div>\`
-        : \`<div class="moreBox"><div class="moreTitle">Información vehículo</div><div class="row"><div class="k">Estado</div><div class="v">Sin ID</div></div></div>\`;
+        : \`<div class="moreBox"><div class="section"><div class="moreTitle">Información del Vehículo</div><div class="row"><div class="k">Estado</div><div class="v">Sin ID</div></div></div></div>\`;
       return \`<div class="card" data-id="\${safeHtml(id)}"><h2>\${title}</h2>\${img}\${initialInfo}</div>\`;
     }
 
@@ -611,10 +613,36 @@ app.get('/dashboard', (req, res) => {
         const extra = message ? (' · ' + message) : '';
         const plateRow = plate ? \`<div class="row"><div class="k">Patente</div><div class="v">\${safeHtml(plate)}</div></div>\` : '';
         const upRow = upstream ? \`<div class="row"><div class="k">Estado</div><div class="v">\${safeHtml(String(upstream))}</div></div>\` : '';
-        return \`<div class="moreTitle">Sin información</div>\${plateRow}\${upRow}<div class="row"><div class="k">Detalle</div><div class="v">\${safeHtml(hint + extra)}</div></div>\`;
+        return \`<div class="section"><div class="moreTitle">Sin información</div>\${plateRow}\${upRow}<div class="row"><div class="k">Detalle</div><div class="v">\${safeHtml(hint + extra)}</div></div></div>\`;
       }
       const vehicle = data.vehicle || null;
       const appraisal = data.appraisal || null;
+
+      function pickDisplayText(value) {
+        if (value === null || value === undefined || value === '') return null;
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+        if (Array.isArray(value)) {
+          const parts = value.map(pickDisplayText).filter(Boolean);
+          return parts.length ? parts.join(', ') : null;
+        }
+        if (typeof value === 'object') {
+          const candidates = [
+            value.name,
+            value.nombre,
+            value.label,
+            value.title,
+            value.value,
+            value.descripcion,
+            value.description
+          ];
+          for (const c of candidates) {
+            const t = pickDisplayText(c);
+            if (t) return t;
+          }
+          return null;
+        }
+        return null;
+      }
 
       const brand =
         vehicle?.brand?.name ||
@@ -648,7 +676,7 @@ app.get('/dashboard', (req, res) => {
         vehicle?.rtLocation ||
         vehicle?.rtCommune ||
         null;
-      const rtPlantHtml = [rtPlantName, rtPlantLocation].filter(Boolean).map((t) => safeHtml(String(t))).join('<br>');
+      const rtPlantHtml = [pickDisplayText(rtPlantName), pickDisplayText(rtPlantLocation)].filter(Boolean).map((t) => safeHtml(String(t))).join('<br>');
 
       const infoRows = [];
       infoRows.push(['Horario de captura', captureAt ? formatDateTime(captureAt) : '—']);
@@ -685,9 +713,9 @@ app.get('/dashboard', (req, res) => {
         return \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(toText(v))}</div></div>\`;
       }).join('');
 
-      const infoHtml = \`<div class="moreTitle">Información del Vehículo</div>\${renderRows(infoRows)}\`;
-      const rtHtml = \`<div class="moreTitle">Revisión Técnica</div>\${renderRows(rtRows)}\`;
-      const appraisalHtml = \`<div class="moreTitle">Tasación</div>\${renderRows(appraisalRows)}\`;
+      const infoHtml = \`<div class="section"><div class="moreTitle">Información del Vehículo</div>\${renderRows(infoRows)}</div>\`;
+      const rtHtml = \`<div class="section"><div class="moreTitle">Revisión Técnica</div>\${renderRows(rtRows)}</div>\`;
+      const appraisalHtml = \`<div class="section"><div class="moreTitle">Tasación</div>\${renderRows(appraisalRows)}</div>\`;
       return \`\${infoHtml}\${rtHtml}\${appraisalHtml}\`;
     }
 
@@ -706,7 +734,7 @@ app.get('/dashboard', (req, res) => {
       if (!id) return;
       if (hasSuccessfulGetApiCached(id)) return;
       const st = statusText ? safeHtml(statusText) : 'Cargando…';
-      setMoreBoxHtml(id, \`<div class="moreTitle">Información vehículo</div><div class="row"><div class="k">Estado</div><div class="v">\${st}</div></div>\`);
+      setMoreBoxHtml(id, \`<div class="section"><div class="moreTitle">Información del Vehículo</div><div class="row"><div class="k">Estado</div><div class="v">\${st}</div></div></div>\`);
     }
 
     function applyEnrichToCard(id, payload) {
