@@ -539,21 +539,15 @@ app.get('/dashboard', (req, res) => {
         ['Ubicación', toText(item.location)]
       ];
 
-      const manualRows = fields.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(v)}</div></div>\`).join('');
       const img = canShowImg ? \`<div class="img"><img src="\${safeHtml(imgUrl)}" alt="snapshot" loading="lazy"></div>\` : '';
 
       let existingGetApi = null;
       if (id) {
-        const fromField = item && item.getapi ? item.getapi : null;
-        const rawObj = fromField ? null : safeJsonParse(item && (item.raw_data ?? null));
-        const existing = fromField || (rawObj && rawObj.enrichment && rawObj.enrichment.getapi ? rawObj.enrichment.getapi : null);
-        if (existing && typeof existing === 'object' && existing.fetched_at) {
-          existingGetApi = existing;
-        }
+        const fromField = item && item.getapi && typeof item.getapi === 'object' ? item.getapi : null;
+        if (fromField && fromField.fetched_at) existingGetApi = fromField;
       }
 
-      const manualInner = \`<div class="moreTitle">Manual</div>\${manualRows}\`;
-      let moreInner = manualInner;
+      let moreInner = \`<div class="moreTitle">Información vehículo</div><div class="row"><div class="k">Estado</div><div class="v">Cargando…</div></div>\`;
       if (id && existingGetApi) {
         const payload = { success: true, data: existingGetApi, cached: true };
         enrichCache.set(id, payload);
@@ -562,9 +556,8 @@ app.get('/dashboard', (req, res) => {
 
       const initialInfo = id
         ? \`<div class="moreBox" id="more-\${safeHtml(id)}">\${moreInner}</div>\`
-        : \`<div class="moreBox">\${manualInner}</div>\`;
-      const manualTpl = id ? \`<template class="manualTpl">\${manualInner}</template>\` : '';
-      return \`<div class="card" data-id="\${safeHtml(id)}"><h2>\${title}</h2>\${img}\${initialInfo}\${manualTpl}</div>\`;
+        : \`<div class="moreBox"><div class="moreTitle">Información vehículo</div><div class="row"><div class="k">Estado</div><div class="v">Sin ID</div></div></div>\`;
+      return \`<div class="card" data-id="\${safeHtml(id)}"><h2>\${title}</h2>\${img}\${initialInfo}</div>\`;
     }
 
     function formatMoney(value) {
@@ -632,24 +625,16 @@ app.get('/dashboard', (req, res) => {
       box.innerHTML = html;
     }
 
-    function renderManualFallbackForId(id) {
-      const card = grid && grid.querySelectorAll
-        ? Array.from(grid.querySelectorAll('.card[data-id]')).find((el) => (el.getAttribute('data-id') || '') === id)
-        : null;
-      const tpl = card ? card.querySelector('template.manualTpl') : null;
-      if (!tpl) return \`<div class="moreTitle">Manual</div><div class="row"><div class="k">Detalle</div><div class="v">Sin datos</div></div>\`;
-      return tpl.innerHTML;
-    }
-
     function hasSuccessfulGetApiCached(id) {
       if (!enrichCache.has(id)) return false;
       return isSuccessfulGetApiPayload(enrichCache.get(id));
     }
 
-    function applyManualFallbackIfMissingGetApi(id) {
+    function applyLoadingIfMissingGetApi(id, statusText) {
       if (!id) return;
       if (hasSuccessfulGetApiCached(id)) return;
-      setMoreBoxHtml(id, renderManualFallbackForId(id));
+      const st = statusText ? safeHtml(statusText) : 'Cargando…';
+      setMoreBoxHtml(id, \`<div class="moreTitle">Información vehículo</div><div class="row"><div class="k">Estado</div><div class="v">\${st}</div></div>\`);
     }
 
     function applyEnrichToCard(id, payload) {
@@ -664,13 +649,13 @@ app.get('/dashboard', (req, res) => {
         getApiCooldownUntilMs = Math.max(getApiCooldownUntilMs, Date.now() + 60000);
         const attempt = (enrichRetry.get(id)?.attempts || 0) + 1;
         enrichRetry.set(id, { attempts: attempt, nextAtMs: Date.now() + nextRetryDelayMs(attempt, payload) });
-        applyManualFallbackIfMissingGetApi(id);
+        setMoreBoxHtml(id, renderMoreData(payload || { success: true, data: null }));
         return;
       }
 
       const attempt = (enrichRetry.get(id)?.attempts || 0) + 1;
       enrichRetry.set(id, { attempts: attempt, nextAtMs: Date.now() + nextRetryDelayMs(attempt, payload) });
-      applyManualFallbackIfMissingGetApi(id);
+      applyLoadingIfMissingGetApi(id, 'Reintentando…');
     }
 
     async function fetchMore(id) {
@@ -702,7 +687,7 @@ app.get('/dashboard', (req, res) => {
           if (hasSuccessfulGetApiCached(id)) {
             applyEnrichToCard(id, enrichCache.get(id));
           } else {
-            applyManualFallbackIfMissingGetApi(id);
+            applyLoadingIfMissingGetApi(id, 'En espera…');
           }
         }
         return;
@@ -727,7 +712,7 @@ app.get('/dashboard', (req, res) => {
           if (hasSuccessfulGetApiCached(id)) {
             applyEnrichToCard(id, enrichCache.get(id));
           } else {
-            applyManualFallbackIfMissingGetApi(id);
+            applyLoadingIfMissingGetApi(id, 'En espera…');
           }
           return;
         }

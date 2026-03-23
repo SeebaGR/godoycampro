@@ -357,17 +357,12 @@ router.get('/detections', async (req, res) => {
     const pollAfterMs = Math.min(maxPollMs, Math.max(basePollMs, Math.round(elapsedMs * 1.25)));
 
     const baseItems = Array.isArray(result.data) ? result.data : [];
-    const dataWithGetApi = baseItems.map((item) => {
-      const rawObj = safeJsonParse(item?.raw_data) || null;
-      const getapi = rawObj?.enrichment?.getapi || null;
-      return { ...(item || {}), getapi };
-    });
-    const missingIds = dataWithGetApi.filter((x) => !x.getapi && !x.raw_data && x.id).map((x) => x.id);
+    const dataWithGetApi = baseItems.map((item) => ({ ...(item || {}), getapi: item?.getapi || null }));
+    const missingIds = dataWithGetApi.filter((x) => !x.getapi && x.id).map((x) => x.id);
     for (const id of missingIds) {
       try {
         const full = await directus.getDetectionById(id);
-        const rawObj = safeJsonParse(full?.raw_data) || null;
-        const getapi = rawObj?.enrichment?.getapi || null;
+        const getapi = full?.getapi || null;
         const idx = dataWithGetApi.findIndex((x) => x.id === id);
         if (idx !== -1) dataWithGetApi[idx] = { ...dataWithGetApi[idx], getapi };
       } catch {
@@ -449,8 +444,10 @@ router.get('/detections/:id/enrich', async (req, res) => {
 
     const rawDataObj = safeJsonParse(item.raw_data) || {};
     const existing = rawDataObj?.enrichment?.getapi || null;
-    if (existing && typeof existing === 'object' && existing.fetched_at) {
-      return res.json({ success: true, data: existing, cached: true });
+    const existingField = item && item.getapi && typeof item.getapi === 'object' ? item.getapi : null;
+    const cached = existingField && existingField.fetched_at ? existingField : (existing && existing.fetched_at ? existing : null);
+    if (cached) {
+      return res.json({ success: true, data: cached, cached: true });
     }
 
     let plate = cleanPlateText(item.license_plate) || null;
@@ -502,12 +499,16 @@ router.get('/detections/:id/enrich', async (req, res) => {
     };
 
     try {
-      await directus.updateDetectionById(id, { raw_data: nextRaw });
+      await directus.updateDetectionById(id, { getapi: result, raw_data: nextRaw });
     } catch (e) {
       try {
-        await directus.updateDetectionById(id, { raw_data: JSON.stringify(nextRaw) });
+        await directus.updateDetectionById(id, { getapi: result, raw_data: JSON.stringify(nextRaw) });
       } catch (e2) {
-        console.warn('No se pudo persistir enrichment.getapi en raw_data:', e2?.message || e2);
+        try {
+          await directus.updateDetectionById(id, { getapi: result });
+        } catch (e3) {
+          console.warn('No se pudo persistir getapi:', e3?.message || e3);
+        }
       }
     }
 

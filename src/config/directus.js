@@ -148,7 +148,7 @@ async function listDetections({ page, limit, license_plate, start_date, end_date
 
   const withFields = {
     ...baseQuery,
-    fields: 'id,timestamp,license_plate,vehicle_type,vehicle_color,speed,direction,confidence,camera_id,location,image_url,raw_data'
+    fields: 'id,timestamp,license_plate,vehicle_type,vehicle_color,speed,direction,confidence,camera_id,location,image_url,getapi'
   };
 
   let payload;
