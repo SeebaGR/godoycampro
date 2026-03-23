@@ -472,7 +472,9 @@ app.get('/dashboard', (req, res) => {
     const enrichCache = new Map();
     const enrichInFlight = new Set();
     let getApiCooldownUntilMs = 0;
-    const enrichMaxPerHydrate = 12;
+    const enrichRetry = new Map();
+    const enrichMaxPerHydrate = 25;
+    const enrichConcurrency = 6;
 
     function isRateLimitedPayload(payload) {
       if (!payload || typeof payload !== 'object') return false;
@@ -480,6 +482,30 @@ app.get('/dashboard', (req, res) => {
       if (payload.upstream_status === 429) return true;
       if (payload.status === 429) return true;
       return false;
+    }
+
+    function isSuccessfulGetApiPayload(payload) {
+      if (!payload || typeof payload !== 'object') return false;
+      const data = payload.data;
+      if (!data || typeof data !== 'object') return false;
+      return typeof data.fetched_at === 'string' && Boolean(data.fetched_at);
+    }
+
+    function nextRetryDelayMs(attempt, payload) {
+      const reason = payload && typeof payload === 'object' ? payload.reason : null;
+      const upstream = payload && typeof payload === 'object' ? (payload.upstream_status || payload.status) : null;
+
+      let base = 4000;
+      if (reason === 'no_plate') base = 6000;
+      else if (reason === 'invalid_plate' || upstream === 422) base = 15000;
+      else if (reason === 'not_found' || upstream === 404) base = 15000;
+      else if (reason === 'missing_getapi_key' || upstream === 401) base = 30000;
+      else if (reason === 'upstream_error' || reason === 'internal_error') base = 6000;
+      else if (isRateLimitedPayload(payload)) base = 60000;
+
+      const n = Math.max(0, Number(attempt) || 0);
+      const backoff = Math.min(60000, base * Math.pow(2, Math.min(n, 4)));
+      return Math.round(backoff);
     }
 
     function renderCard(item) {
@@ -614,26 +640,36 @@ app.get('/dashboard', (req, res) => {
       return tpl.innerHTML;
     }
 
-    function hasNonRateLimitedGetApiCached(id) {
+    function hasSuccessfulGetApiCached(id) {
       if (!enrichCache.has(id)) return false;
-      const payload = enrichCache.get(id);
-      return payload && typeof payload === 'object' && !isRateLimitedPayload(payload);
+      return isSuccessfulGetApiPayload(enrichCache.get(id));
     }
 
     function applyManualFallbackIfMissingGetApi(id) {
       if (!id) return;
-      if (hasNonRateLimitedGetApiCached(id)) return;
+      if (hasSuccessfulGetApiCached(id)) return;
       setMoreBoxHtml(id, renderManualFallbackForId(id));
     }
 
     function applyEnrichToCard(id, payload) {
       if (!id) return;
+      if (isSuccessfulGetApiPayload(payload)) {
+        enrichRetry.delete(id);
+        setMoreBoxHtml(id, renderMoreData(payload));
+        return;
+      }
+
       if (isRateLimitedPayload(payload)) {
         getApiCooldownUntilMs = Math.max(getApiCooldownUntilMs, Date.now() + 60000);
+        const attempt = (enrichRetry.get(id)?.attempts || 0) + 1;
+        enrichRetry.set(id, { attempts: attempt, nextAtMs: Date.now() + nextRetryDelayMs(attempt, payload) });
         applyManualFallbackIfMissingGetApi(id);
         return;
       }
-      setMoreBoxHtml(id, renderMoreData(payload || { success: true, data: null }));
+
+      const attempt = (enrichRetry.get(id)?.attempts || 0) + 1;
+      enrichRetry.set(id, { attempts: attempt, nextAtMs: Date.now() + nextRetryDelayMs(attempt, payload) });
+      applyManualFallbackIfMissingGetApi(id);
     }
 
     async function fetchMore(id) {
@@ -662,7 +698,7 @@ app.get('/dashboard', (req, res) => {
         for (const el of cards) {
           const id = el.getAttribute('data-id') || '';
           if (!id) continue;
-          if (hasNonRateLimitedGetApiCached(id)) {
+          if (hasSuccessfulGetApiCached(id)) {
             applyEnrichToCard(id, enrichCache.get(id));
           } else {
             applyManualFallbackIfMissingGetApi(id);
@@ -675,12 +711,19 @@ app.get('/dashboard', (req, res) => {
         .map((el) => el.getAttribute('data-id') || '')
         .filter(Boolean);
 
-      const pending = ids.filter((id) => !hasNonRateLimitedGetApiCached(id) && !enrichInFlight.has(id));
+      const now = Date.now();
+      const pending = ids.filter((id) => {
+        if (hasSuccessfulGetApiCached(id)) return false;
+        if (enrichInFlight.has(id)) return false;
+        const r = enrichRetry.get(id);
+        if (r && typeof r.nextAtMs === 'number' && now < r.nextAtMs) return false;
+        return true;
+      });
       const batch = pending.slice(0, Math.max(1, enrichMaxPerHydrate));
 
-      await runPool(batch, 4, async (id) => {
+      await runPool(batch, enrichConcurrency, async (id) => {
         if (Date.now() < getApiCooldownUntilMs) {
-          if (hasNonRateLimitedGetApiCached(id)) {
+          if (hasSuccessfulGetApiCached(id)) {
             applyEnrichToCard(id, enrichCache.get(id));
           } else {
             applyManualFallbackIfMissingGetApi(id);
@@ -688,7 +731,7 @@ app.get('/dashboard', (req, res) => {
           return;
         }
 
-        if (hasNonRateLimitedGetApiCached(id)) {
+        if (hasSuccessfulGetApiCached(id)) {
           applyEnrichToCard(id, enrichCache.get(id));
           return;
         }
