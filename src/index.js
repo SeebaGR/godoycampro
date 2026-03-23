@@ -458,8 +458,21 @@ app.get('/dashboard', (req, res) => {
       return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
+    function safeJsonParse(text) {
+      if (!text) return null;
+      if (typeof text === 'object') return text;
+      if (typeof text !== 'string') return null;
+      try {
+        return JSON.parse(text);
+      } catch {
+        return null;
+      }
+    }
+
     const enrichCache = new Map();
+    const enrichInFlight = new Set();
     let getApiCooldownUntilMs = 0;
+    const enrichMaxPerHydrate = 12;
 
     function isRateLimitedPayload(payload) {
       if (!payload || typeof payload !== 'object') return false;
@@ -502,10 +515,28 @@ app.get('/dashboard', (req, res) => {
 
       const manualRows = fields.map(([k, v]) => \`<div class="row"><div class="k">\${safeHtml(k)}</div><div class="v">\${safeHtml(v)}</div></div>\`).join('');
       const img = canShowImg ? \`<div class="img"><img src="\${safeHtml(imgUrl)}" alt="snapshot" loading="lazy"></div>\` : '';
+
+      let existingGetApi = null;
+      if (id) {
+        const rawObj = safeJsonParse(item && (item.raw_data ?? null));
+        const existing = rawObj && rawObj.enrichment && rawObj.enrichment.getapi ? rawObj.enrichment.getapi : null;
+        if (existing && typeof existing === 'object' && existing.fetched_at) {
+          existingGetApi = existing;
+        }
+      }
+
+      const manualInner = \`<div class="moreTitle">Manual</div>\${manualRows}\`;
+      let moreInner = manualInner;
+      if (id && existingGetApi) {
+        const payload = { success: true, data: existingGetApi, cached: true };
+        enrichCache.set(id, payload);
+        moreInner = renderMoreData(payload);
+      }
+
       const initialInfo = id
-        ? \`<div class="moreBox" id="more-\${safeHtml(id)}"><div class="moreTitle">Información vehículo</div><div class="row"><div class="k">Estado</div><div class="v">Cargando…</div></div></div>\`
-        : \`<div class="moreBox"><div class="moreTitle">Manual</div>\${manualRows}</div>\`;
-      const manualTpl = id ? \`<template class="manualTpl"><div class="moreTitle">Manual</div>\${manualRows}</template>\` : '';
+        ? \`<div class="moreBox" id="more-\${safeHtml(id)}">\${moreInner}</div>\`
+        : \`<div class="moreBox">\${manualInner}</div>\`;
+      const manualTpl = id ? \`<template class="manualTpl">\${manualInner}</template>\` : '';
       return \`<div class="card" data-id="\${safeHtml(id)}"><h2>\${title}</h2>\${img}\${initialInfo}\${manualTpl}</div>\`;
     }
 
@@ -583,21 +614,23 @@ app.get('/dashboard', (req, res) => {
       return tpl.innerHTML;
     }
 
-    function applyManualFallbackForAllRenderedCards() {
-      if (!grid || !grid.querySelectorAll) return;
-      const cards = Array.from(grid.querySelectorAll('.card[data-id]'));
-      for (const el of cards) {
-        const id = el.getAttribute('data-id') || '';
-        if (!id) continue;
-        setMoreBoxHtml(id, renderManualFallbackForId(id));
-      }
+    function hasNonRateLimitedGetApiCached(id) {
+      if (!enrichCache.has(id)) return false;
+      const payload = enrichCache.get(id);
+      return payload && typeof payload === 'object' && !isRateLimitedPayload(payload);
+    }
+
+    function applyManualFallbackIfMissingGetApi(id) {
+      if (!id) return;
+      if (hasNonRateLimitedGetApiCached(id)) return;
+      setMoreBoxHtml(id, renderManualFallbackForId(id));
     }
 
     function applyEnrichToCard(id, payload) {
       if (!id) return;
       if (isRateLimitedPayload(payload)) {
         getApiCooldownUntilMs = Math.max(getApiCooldownUntilMs, Date.now() + 60000);
-        applyManualFallbackForAllRenderedCards();
+        applyManualFallbackIfMissingGetApi(id);
         return;
       }
       setMoreBoxHtml(id, renderMoreData(payload || { success: true, data: null }));
@@ -629,7 +662,11 @@ app.get('/dashboard', (req, res) => {
         for (const el of cards) {
           const id = el.getAttribute('data-id') || '';
           if (!id) continue;
-          setMoreBoxHtml(id, renderManualFallbackForId(id));
+          if (hasNonRateLimitedGetApiCached(id)) {
+            applyEnrichToCard(id, enrichCache.get(id));
+          } else {
+            applyManualFallbackIfMissingGetApi(id);
+          }
         }
         return;
       }
@@ -638,20 +675,33 @@ app.get('/dashboard', (req, res) => {
         .map((el) => el.getAttribute('data-id') || '')
         .filter(Boolean);
 
-      await runPool(ids, 4, async (id) => {
+      const pending = ids.filter((id) => !hasNonRateLimitedGetApiCached(id) && !enrichInFlight.has(id));
+      const batch = pending.slice(0, Math.max(1, enrichMaxPerHydrate));
+
+      await runPool(batch, 4, async (id) => {
         if (Date.now() < getApiCooldownUntilMs) {
-          setMoreBoxHtml(id, renderManualFallbackForId(id));
+          if (hasNonRateLimitedGetApiCached(id)) {
+            applyEnrichToCard(id, enrichCache.get(id));
+          } else {
+            applyManualFallbackIfMissingGetApi(id);
+          }
           return;
         }
 
-        if (enrichCache.has(id)) {
+        if (hasNonRateLimitedGetApiCached(id)) {
           applyEnrichToCard(id, enrichCache.get(id));
           return;
         }
 
-        const payload = await fetchMore(id).catch(() => null);
-        enrichCache.set(id, payload);
-        applyEnrichToCard(id, payload);
+        if (enrichInFlight.has(id)) return;
+        enrichInFlight.add(id);
+        try {
+          const payload = await fetchMore(id).catch(() => null);
+          if (payload) enrichCache.set(id, payload);
+          applyEnrichToCard(id, payload);
+        } finally {
+          enrichInFlight.delete(id);
+        }
       });
     }
 
