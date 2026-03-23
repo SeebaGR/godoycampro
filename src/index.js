@@ -720,6 +720,14 @@ app.get('/health', (req, res) => {
       collection: cfg?.collection || null,
       has_token: Boolean(cfg?.token)
     },
+    getapi: {
+      configured: Boolean((process.env.GETAPI_API_KEY || process.env.GETAPI_KEY || process.env.GETAPI_X_API_KEY || process.env.X_API_KEY_GETAPI || '').trim()),
+      base_url: (process.env.GETAPI_BASE_URL || 'https://chile.getapi.cl').trim().replace(/\/+$/, '')
+    },
+    groq: {
+      configured: Boolean((process.env.GROQ_API_KEY || '').trim()),
+      model: (process.env.GROQ_MODEL || '').trim() || 'meta-llama/llama-4-scout-17b-16e-instruct'
+    },
     app: {
       node_env: process.env.NODE_ENV || null,
       public_base_url: PUBLIC_BASE_URL || null
