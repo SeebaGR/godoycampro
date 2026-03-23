@@ -632,6 +632,10 @@ app.get('/dashboard', (req, res) => {
             value.label,
             value.title,
             value.value,
+            value.concesionPlantaRevisora,
+            value.comuna,
+            value.region,
+            value.direccion,
             value.descripcion,
             value.description
           ];
@@ -664,6 +668,9 @@ app.get('/dashboard', (req, res) => {
       const rtPlantName =
         vehicle?.rtPlant?.name ||
         vehicle?.rtPlantName ||
+        vehicle?.plantaRevisora?.concesionPlantaRevisora ||
+        vehicle?.plantaRevisora?.name ||
+        vehicle?.plantaRevisora?.nombre ||
         vehicle?.plantaRevisora ||
         vehicle?.rtStation?.name ||
         vehicle?.rtStationName ||
@@ -675,6 +682,14 @@ app.get('/dashboard', (req, res) => {
         vehicle?.rtPlantAddress ||
         vehicle?.rtLocation ||
         vehicle?.rtCommune ||
+        (vehicle?.plantaRevisora && typeof vehicle.plantaRevisora === 'object'
+          ? (() => {
+              const comuna = pickDisplayText(vehicle.plantaRevisora.comuna);
+              const region = pickDisplayText(vehicle.plantaRevisora.region);
+              if (comuna && region) return comuna + ', ' + region;
+              return comuna || region || pickDisplayText(vehicle.plantaRevisora.direccion) || null;
+            })()
+          : null) ||
         null;
       const rtPlantHtml = [pickDisplayText(rtPlantName), pickDisplayText(rtPlantLocation)].filter(Boolean).map((t) => safeHtml(String(t))).join('<br>');
 
