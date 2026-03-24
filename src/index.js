@@ -1128,5 +1128,8 @@ app.listen(PORT, () => {
   console.log(`\n🚀 Servidor corriendo en puerto ${PORT}`);
   console.log(`📡 Webhook URL: ${base}/api/webhook/detection`);
   console.log(`📊 Health check: ${base}/health`);
+  const hasGetApiKey = Boolean((process.env.GETAPI_API_KEY || process.env.GETAPI_KEY || process.env.GETAPI_X_API_KEY || process.env.X_API_KEY_GETAPI || '').trim());
+  const getApiBase = (process.env.GETAPI_BASE_URL || 'https://chile.getapi.cl').trim().replace(/\/+$/, '');
+  console.log(`🔑 GETAPI_API_KEY ${hasGetApiKey ? 'configurado' : 'NO configurado'} · Base: ${getApiBase}`);
   console.log(`\n✅ Listo para recibir detecciones de la cámara DAHUA\n`);
 });

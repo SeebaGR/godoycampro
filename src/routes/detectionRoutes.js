@@ -117,6 +117,7 @@ async function fetchGetApiJson(path) {
   const key = getGetApiKey();
   if (!key) return { ok: false, status: 401, data: null, reason: 'missing_getapi_key', message: 'Falta GETAPI_API_KEY' };
   const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+  console.log('Consultando GetAPI:', url);
   const res = await fetch(url, { headers: { 'X-Api-Key': key, Accept: 'application/json' } });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -154,10 +155,12 @@ async function enrichAndPersistDetection({ id, plate }) {
 
   enrichInFlight.add(detId);
   try {
+    console.log('Iniciando enriquecimiento GetAPI para detección:', detId, 'patente:', cleanPlate);
     const vehicleRes = await fetchGetApiJson(`/v1/vehicles/plate/${encodeURIComponent(cleanPlate)}`);
     if (!vehicleRes.ok) {
       if (vehicleRes.reason === 'rate_limited' || vehicleRes.status === 429) {
         getApiCooldownUntilMs = Math.max(getApiCooldownUntilMs, Date.now() + 60000);
+        console.warn('GetAPI limitado por tasa, se pausará solicitudes por 60s');
         return;
       }
       if (vehicleRes.status === 401 || vehicleRes.status === 403) return;
@@ -172,7 +175,17 @@ async function enrichAndPersistDetection({ id, plate }) {
           message: vehicleRes.message || null
         }
       };
-      await directus.updateDetectionById(detId, { getapi: failure });
+      try {
+        await directus.updateDetectionById(detId, { getapi: failure });
+        console.log('Persistido fallo GetAPI en Directus para id:', detId);
+      } catch (e1) {
+        try {
+          await directus.updateDetectionById(detId, { getapi: JSON.stringify(failure) });
+          console.log('Persistido fallo GetAPI (string) en Directus para id:', detId);
+        } catch (e2) {
+          console.error('No se pudo persistir fallo GetAPI en Directus:', e2?.message || e2);
+        }
+      }
       return;
     }
 
@@ -185,6 +198,7 @@ async function enrichAndPersistDetection({ id, plate }) {
     const appraisalRes = await fetchGetApiJson(`/v1/vehicles/appraisal/${encodeURIComponent(cleanPlate)}`);
     if (!appraisalRes.ok && (appraisalRes.reason === 'rate_limited' || appraisalRes.status === 429)) {
       getApiCooldownUntilMs = Math.max(getApiCooldownUntilMs, Date.now() + 60000);
+      console.warn('GetAPI tasación limitado por tasa, se pausará solicitudes por 60s');
       return;
     }
 
@@ -198,7 +212,17 @@ async function enrichAndPersistDetection({ id, plate }) {
       appraisal: appraisalData || null
     };
 
-    await directus.updateDetectionById(detId, { getapi: result });
+    try {
+      await directus.updateDetectionById(detId, { getapi: result });
+      console.log('Enriquecimiento GetAPI persistido en Directus para id:', detId);
+    } catch (e1) {
+      try {
+        await directus.updateDetectionById(detId, { getapi: JSON.stringify(result) });
+        console.log('Enriquecimiento GetAPI persistido como string en Directus para id:', detId);
+      } catch (e2) {
+        console.error('No se pudo persistir enriquecimiento GetAPI en Directus:', e2?.message || e2);
+      }
+    }
   } finally {
     enrichInFlight.delete(detId);
   }
@@ -455,6 +479,9 @@ router.get('/detections', async (req, res) => {
     const baseItems = Array.isArray(result.data) ? result.data : [];
     const dataWithGetApi = baseItems.map((item) => ({ ...(item || {}), getapi: item?.getapi || null }));
     const missingIds = dataWithGetApi.filter((x) => !x.getapi && x.id).map((x) => x.id);
+    if (missingIds.length) {
+      console.log('Detecciones sin getapi:', missingIds.length);
+    }
     for (const id of missingIds) {
       try {
         const full = await directus.getDetectionById(id);
@@ -468,6 +495,9 @@ router.get('/detections', async (req, res) => {
     const enrichCandidates = dataWithGetApi
       .filter((x) => x && x.id && !x.getapi && typeof x.license_plate === 'string' && isChileanPlate(x.license_plate))
       .slice(0, 2);
+    if (enrichCandidates.length) {
+      console.log('Agendando enriquecimiento de getapi para ids:', enrichCandidates.map((x) => x.id).join(', '));
+    }
     for (const x of enrichCandidates) {
       enrichAndPersistDetection({ id: x.id, plate: x.license_plate }).catch(() => null);
     }
@@ -544,6 +574,7 @@ router.get('/detections/:id/enrich', async (req, res) => {
 
     const item = await directus.getDetectionById(id);
     if (!item) return res.status(404).json({ success: false, error: 'Detección no encontrada' });
+    console.log('Solicitud de enriquecimiento manual para id:', id);
 
     function isGetApiData(data) {
       if (!data || typeof data !== 'object') return false;
@@ -564,15 +595,18 @@ router.get('/detections/:id/enrich', async (req, res) => {
 
     let plate = cleanPlateText(item.license_plate) || null;
     if (!plate) {
+      console.warn('Detección sin patente para enriquecimiento:', id);
       return res.json({ success: true, data: null, cached: false, reason: 'no_plate' });
     }
 
     if (!isChileanPlate(plate)) {
+      console.warn('Formato de patente inválido para enriquecimiento:', id, plate);
       return res.json({ success: true, data: null, cached: false, reason: 'invalid_plate_format', plate });
     }
 
     const vehicleRes = await fetchGetApiJson(`/v1/vehicles/plate/${encodeURIComponent(plate)}`);
     if (!vehicleRes.ok) {
+      console.warn('Fallo consulta vehículo en GetAPI:', { id, plate, status: vehicleRes.status, reason: vehicleRes.reason, message: vehicleRes.message });
       return res.json({
         success: true,
         data: null,
@@ -611,9 +645,11 @@ router.get('/detections/:id/enrich', async (req, res) => {
 
     try {
       await directus.updateDetectionById(id, { getapi: result, raw_data: nextRaw });
+      console.log('Persistido enriquecimiento en Directus desde endpoint manual para id:', id);
     } catch (e) {
       try {
         await directus.updateDetectionById(id, { getapi: result, raw_data: JSON.stringify(nextRaw) });
+        console.log('Persistido enriquecimiento (raw_data string) en Directus para id:', id);
       } catch (e2) {
         try {
           await directus.updateDetectionById(id, { getapi: result });
