@@ -441,9 +441,23 @@ app.get('/dashboard', (req, res) => {
       return String(value);
     }
 
+    function normalizePlateText(value) {
+      if (!value || typeof value !== 'string') return '';
+      const upper = value.trim().toUpperCase();
+      if (!upper) return '';
+      const mapped = upper.replace(/[\u0400-\u04FF\u0370-\u03FF]/g, (ch) => {
+        const map = {
+          'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'І': 'I', 'Ј': 'J',
+          'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I', 'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X'
+        };
+        return map[ch] || '';
+      });
+      return mapped.replace(/[^A-Z0-9]/g, '');
+    }
+
     function isChileanPlate(plate) {
       if (!plate || typeof plate !== 'string') return false;
-      const p = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const p = normalizePlateText(plate);
       return /^[A-Z]{4}\d{2}$/.test(p) || /^[A-Z]{2}\d{4}$/.test(p);
     }
 

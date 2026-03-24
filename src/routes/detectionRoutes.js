@@ -24,7 +24,15 @@ function safeJsonParse(value) {
 
 function cleanPlateText(input) {
   if (typeof input !== 'string') return null;
-  const cleaned = input.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const upper = input.trim().toUpperCase();
+  const mapped = upper.replace(/[\u0400-\u04FF\u0370-\u03FF]/g, (ch) => {
+    const map = {
+      'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'І': 'I', 'Ј': 'J',
+      'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I', 'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X'
+    };
+    return map[ch] || '';
+  });
+  const cleaned = mapped.replace(/[^A-Z0-9]/g, '');
   if (!cleaned || cleaned.length < 5) return null;
   const modern = cleaned.match(/[A-Z]{4}\d{2}/);
   if (modern) return modern[0];
@@ -36,7 +44,8 @@ function cleanPlateText(input) {
 
 function isChileanPlate(plate) {
   if (typeof plate !== 'string') return false;
-  const p = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const p = cleanPlateText(plate);
+  if (!p) return false;
   return /^[A-Z]{4}\d{2}$/.test(p) || /^[A-Z]{2}\d{4}$/.test(p);
 }
 
@@ -477,11 +486,6 @@ router.get('/detections/:id/enrich', async (req, res) => {
     }
 
     let plate = cleanPlateText(item.license_plate) || null;
-    if (!plate) {
-      const absImg = absolutizePublicUrl(item.image_url);
-      plate = await groqExtractPlateFromImageUrl(absImg);
-    }
-
     if (!plate) {
       return res.json({ success: true, data: null, cached: false, reason: 'no_plate' });
     }

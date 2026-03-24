@@ -1,6 +1,20 @@
 // Servicio para procesar datos recibidos de la cámara DAHUA
 const crypto = require('crypto');
 class CameraService {
+  normalizePlateText(value) {
+    if (typeof value !== 'string') return null;
+    const upper = value.trim().toUpperCase();
+    if (!upper) return null;
+    const mapped = upper.replace(/[\u0400-\u04FF\u0370-\u03FF]/g, (ch) => {
+      const map = {
+        'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'І': 'I', 'Ј': 'J',
+        'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I', 'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X'
+      };
+      return map[ch] || '';
+    });
+    const cleaned = mapped.replace(/[^A-Z0-9]/g, '');
+    return cleaned || null;
+  }
   parseDahuaDateTime(value) {
     if (typeof value !== 'string') return null;
     const s = value.trim();
@@ -106,12 +120,10 @@ class CameraService {
     const rawPlate = cameraData?.PlateNumber ?? cameraData?.plateNumber ?? null;
     let licensePlate = null;
     if (typeof rawPlate === 'string') {
-      const cleaned = rawPlate.trim().replace(/\s+/g, '').toUpperCase();
-      if (cleaned && cleaned !== 'SINPATENTE' && cleaned !== 'SINPLACA') {
-        licensePlate = cleaned;
-      }
+      const cleaned = this.normalizePlateText(rawPlate);
+      if (cleaned && cleaned !== 'SINPATENTE' && cleaned !== 'SINPLACA') licensePlate = cleaned;
     } else if (rawPlate != null) {
-      licensePlate = String(rawPlate).trim().replace(/\s+/g, '').toUpperCase() || null;
+      licensePlate = this.normalizePlateText(String(rawPlate)) || null;
     }
 
     const rawImageUrl =
@@ -151,7 +163,10 @@ class CameraService {
       return { valid: false, error: 'Sin patente' };
     }
 
-    const normalized = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const normalized = this.normalizePlateText(plate);
+    if (!normalized) {
+      return { valid: false, error: 'Sin patente' };
+    }
     const isChilean = /^[A-Z]{4}\d{2}$/.test(normalized) || /^[A-Z]{2}\d{4}$/.test(normalized);
     if (!isChilean) {
       return { valid: false, error: 'Formato de patente inválido' };
