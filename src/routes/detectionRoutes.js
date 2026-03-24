@@ -36,7 +36,7 @@ function cleanPlateText(input) {
 
 function isChileanPlate(plate) {
   if (typeof plate !== 'string') return false;
-  const p = plate.trim().toUpperCase();
+  const p = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   return /^[A-Z]{4}\d{2}$/.test(p) || /^[A-Z]{2}\d{4}$/.test(p);
 }
 
