@@ -538,7 +538,7 @@ app.get('/dashboard', (req, res) => {
 
       function buildAssetUrl(assetId) {
         const u = new URL('/api/assets/' + assetId, window.location.origin);
-        u.searchParams.set('width', '640');
+        u.searchParams.set('width', '480');
         return u.toString();
       }
 

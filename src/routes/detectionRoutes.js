@@ -340,8 +340,8 @@ router.get('/detections', async (req, res) => {
     const start_date = Array.isArray(req.query.start_date) ? req.query.start_date[0] : req.query.start_date;
     const end_date = Array.isArray(req.query.end_date) ? req.query.end_date[0] : req.query.end_date;
 
-    const cacheMs = Number.parseInt(process.env.DETECTIONS_CACHE_MS ?? '2000', 10) || 2000;
-    const minPollMs = Number.parseInt(process.env.DETECTIONS_MIN_POLL_MS ?? '2500', 10) || 2500;
+    const cacheMs = Number.parseInt(process.env.DETECTIONS_CACHE_MS ?? '8000', 10) || 8000;
+    const minPollMs = Number.parseInt(process.env.DETECTIONS_MIN_POLL_MS ?? '8000', 10) || 8000;
     const maxPollMs = Number.parseInt(process.env.DETECTIONS_MAX_POLL_MS ?? '20000', 10) || 20000;
     const basePollMs = Math.min(maxPollMs, Math.max(minPollMs, cacheMs));
     const cacheKey = JSON.stringify({
