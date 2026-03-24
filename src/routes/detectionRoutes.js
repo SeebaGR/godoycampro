@@ -28,6 +28,7 @@ function cleanPlateText(input) {
   const mapped = upper.replace(/[\u0400-\u04FF\u0370-\u03FF]/g, (ch) => {
     const map = {
       'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'І': 'I', 'Ј': 'J',
+      'З': 'Z',
       'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I', 'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X'
     };
     return map[ch] || '';
@@ -61,44 +62,6 @@ function getGetApiKey() {
     '';
   const t = String(v).trim();
   return t || null;
-}
-
-async function groqExtractPlateFromImageUrl(imageUrl) {
-  const key = (process.env.GROQ_API_KEY || '').trim();
-  if (!key || !imageUrl) return null;
-  const model = (process.env.GROQ_MODEL || '').trim() || 'meta-llama/llama-4-scout-17b-16e-instruct';
-
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${key}`
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: 'Mira esta imagen de una patente vehicular chilena. Lee EXACTAMENTE los caracteres que ves en la placa. Las patentes chilenas tienen formato: 4 letras + 2 números (ej: LYHR62, BBCD34) o 2 letras + 4 números (ej: AB1234). Distingue letras similares (O vs 0, I vs 1, S vs 5, G vs 6, Z vs 2, Y vs V). Responde SOLO con los caracteres de la patente en mayúsculas, sin espacios, sin puntos, sin guiones.'
-            },
-            { type: 'image_url', image_url: { url: imageUrl } }
-          ]
-        }
-      ],
-      temperature: 0.1,
-      max_completion_tokens: 20,
-      top_p: 1,
-      stream: false
-    })
-  });
-
-  if (!res.ok) return null;
-  const data = await res.json().catch(() => null);
-  const text = data?.choices?.[0]?.message?.content?.trim?.() || null;
-  return cleanPlateText(text);
 }
 
 function absolutizePublicUrl(pathOrUrl) {
@@ -600,7 +563,7 @@ router.get('/detections/:id/enrich', async (req, res) => {
     }
 
     if (!isChileanPlate(plate)) {
-      console.warn('Formato de patente inválido para enriquecimiento:', id, plate);
+      console.warn('Formato de patente inválido para enriquecimiento:', { id, raw: item.license_plate, cleaned: plate });
       return res.json({ success: true, data: null, cached: false, reason: 'invalid_plate_format', plate });
     }
 

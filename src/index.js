@@ -448,11 +448,22 @@ app.get('/dashboard', (req, res) => {
       const mapped = upper.replace(/[\u0400-\u04FF\u0370-\u03FF]/g, (ch) => {
         const map = {
           'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'І': 'I', 'Ј': 'J',
+          'З': 'Z',
           'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I', 'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X'
         };
         return map[ch] || '';
       });
       return mapped.replace(/[^A-Z0-9]/g, '');
+    }
+
+    function plateDebugInfo(value) {
+      const raw = typeof value === 'string' ? value : String(value ?? '');
+      const normalized = normalizePlateText(raw);
+      const chars = Array.from(raw).slice(0, 32).map((ch) => {
+        const hex = (ch.codePointAt(0) || 0).toString(16).toUpperCase().padStart(4, '0');
+        return 'U+' + hex + '(' + ch + ')';
+      });
+      return { raw, normalized, raw_len: raw.length, normalized_len: normalized.length, sample_codepoints: chars };
     }
 
     function isChileanPlate(plate) {
@@ -896,6 +907,7 @@ app.get('/dashboard', (req, res) => {
       for (const id of pending.slice()) {
         const plate = plateById.get(id) || '';
         if (plate && !isChileanPlate(plate)) {
+          console.warn('Patente marcada inválida en dashboard:', { id, ...plateDebugInfo(plate) });
           const payload = { success: true, data: null, reason: 'invalid_plate_format', plate };
           enrichCache.set(id, payload);
           applyEnrichToCard(id, payload);
@@ -924,6 +936,7 @@ app.get('/dashboard', (req, res) => {
 
         const p = plateById.get(id) || '';
         if (p && !isChileanPlate(p)) {
+          console.warn('Patente marcada inválida en dashboard (worker):', { id, ...plateDebugInfo(p) });
           const payload = { success: true, data: null, reason: 'invalid_plate_format', plate: p };
           enrichCache.set(id, payload);
           applyEnrichToCard(id, payload);
@@ -1087,10 +1100,6 @@ app.get('/health', (req, res) => {
     getapi: {
       configured: Boolean((process.env.GETAPI_API_KEY || process.env.GETAPI_KEY || process.env.GETAPI_X_API_KEY || process.env.X_API_KEY_GETAPI || '').trim()),
       base_url: (process.env.GETAPI_BASE_URL || 'https://chile.getapi.cl').trim().replace(/\/+$/, '')
-    },
-    groq: {
-      configured: Boolean((process.env.GROQ_API_KEY || '').trim()),
-      model: (process.env.GROQ_MODEL || '').trim() || 'meta-llama/llama-4-scout-17b-16e-instruct'
     },
     app: {
       node_env: process.env.NODE_ENV || null,
