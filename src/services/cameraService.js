@@ -151,6 +151,12 @@ class CameraService {
       return { valid: false, error: 'Sin patente' };
     }
 
+    const normalized = plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const isChilean = /^[A-Z]{4}\d{2}$/.test(normalized) || /^[A-Z]{2}\d{4}$/.test(normalized);
+    if (!isChilean) {
+      return { valid: false, error: 'Formato de patente inválido' };
+    }
+
     return { valid: true };
   }
 

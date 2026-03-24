@@ -441,6 +441,12 @@ app.get('/dashboard', (req, res) => {
       return String(value);
     }
 
+    function isChileanPlate(plate) {
+      if (!plate || typeof plate !== 'string') return false;
+      const p = plate.trim().toUpperCase();
+      return /^[A-Z]{4}\d{2}$/.test(p) || /^[A-Z]{2}\d{4}$/.test(p);
+    }
+
     function formatDateTime(value) {
       if (!value) return '—';
       const d = new Date(value);
@@ -486,6 +492,7 @@ app.get('/dashboard', (req, res) => {
     const enrichCache = new Map();
     const enrichInFlight = new Set();
     const captureAtById = new Map();
+    const plateById = new Map();
     let getApiCooldownUntilMs = 0;
     const enrichRetry = new Map();
     const enrichMaxPerHydrate = 25;
@@ -496,6 +503,19 @@ app.get('/dashboard', (req, res) => {
       if (payload.reason === 'rate_limited') return true;
       if (payload.upstream_status === 429) return true;
       if (payload.status === 429) return true;
+      return false;
+    }
+
+    function isTerminalGetApiPayload(payload) {
+      if (!payload || typeof payload !== 'object') return false;
+      const reason = typeof payload.reason === 'string' ? payload.reason : null;
+      const upstream = payload && (payload.upstream_status || payload.status) ? (payload.upstream_status || payload.status) : null;
+      if (reason === 'invalid_plate_format') return true;
+      if (reason === 'invalid_plate' || upstream === 422) return true;
+      if (reason === 'not_found' || upstream === 404) return true;
+      if (reason === 'no_plate') return true;
+      if (reason === 'missing_getapi_key' || upstream === 401) return true;
+      if (reason === 'unauthorized' || reason === 'forbidden' || upstream === 403) return true;
       return false;
     }
 
@@ -538,7 +558,7 @@ app.get('/dashboard', (req, res) => {
 
       function buildAssetUrl(assetId) {
         const u = new URL('/api/assets/' + assetId, window.location.origin);
-        u.searchParams.set('width', '480');
+        u.searchParams.set('width', '640');
         return u.toString();
       }
 
@@ -552,7 +572,10 @@ app.get('/dashboard', (req, res) => {
       }
       const canShowImg = typeof imgUrl === 'string' && (imgUrl.startsWith('http') || imgUrl.startsWith('data:image'));
       const id = item && item.id ? String(item.id) : '';
-      if (id) captureAtById.set(id, item && item.timestamp ? item.timestamp : null);
+      if (id) {
+        captureAtById.set(id, item && item.timestamp ? item.timestamp : null);
+        plateById.set(id, item && item.license_plate ? String(item.license_plate) : null);
+      }
       const fields = [
         ['Fecha', formatDateTime(item.timestamp)],
         ['Tipo', toText(item.vehicle_type)],
@@ -615,6 +638,8 @@ app.get('/dashboard', (req, res) => {
           hint = 'GetAPI sin solicitudes (rate limit). Intenta más tarde.';
         } else if (reason === 'not_found' || upstream === 404) {
           hint = 'GetAPI no encontró la patente.';
+        } else if (reason === 'invalid_plate_format') {
+          hint = 'Formato de patente inválido.';
         } else if (reason === 'invalid_plate' || upstream === 422) {
           hint = 'Formato de patente inválido.';
         } else if (reason === 'no_plate') {
@@ -753,7 +778,8 @@ app.get('/dashboard', (req, res) => {
 
     function hasSuccessfulGetApiCached(id) {
       if (!enrichCache.has(id)) return false;
-      return isSuccessfulGetApiPayload(enrichCache.get(id));
+      const payload = enrichCache.get(id);
+      return isSuccessfulGetApiPayload(payload) || isTerminalGetApiPayload(payload);
     }
 
     function applyLoadingIfMissingGetApi(id, statusText) {
@@ -775,6 +801,12 @@ app.get('/dashboard', (req, res) => {
         getApiCooldownUntilMs = Math.max(getApiCooldownUntilMs, Date.now() + 60000);
         const attempt = (enrichRetry.get(id)?.attempts || 0) + 1;
         enrichRetry.set(id, { attempts: attempt, nextAtMs: Date.now() + nextRetryDelayMs(attempt, payload) });
+        setMoreBoxHtml(id, renderMoreData(payload || { success: true, data: null }, captureAtById.get(id)));
+        return;
+      }
+
+      if (isTerminalGetApiPayload(payload)) {
+        enrichRetry.delete(id);
         setMoreBoxHtml(id, renderMoreData(payload || { success: true, data: null }, captureAtById.get(id)));
         return;
       }
@@ -846,7 +878,20 @@ app.get('/dashboard', (req, res) => {
         if (r && typeof r.nextAtMs === 'number' && now < r.nextAtMs) return false;
         return true;
       });
-      const batch = pending.slice(0, Math.max(1, enrichMaxPerHydrate));
+      // Evitar recursos en patentes no chilenas: marcar como terminal y no agendar
+      for (const id of pending.slice()) {
+        const plate = plateById.get(id) || '';
+        if (plate && !isChileanPlate(plate)) {
+          const payload = { success: true, data: null, reason: 'invalid_plate_format', plate };
+          enrichCache.set(id, payload);
+          applyEnrichToCard(id, payload);
+        }
+      }
+      const eligible = pending.filter((id) => {
+        const plate = plateById.get(id) || '';
+        return !plate || isChileanPlate(plate);
+      });
+      const batch = eligible.slice(0, Math.max(1, enrichMaxPerHydrate));
 
       await runPool(batch, enrichConcurrency, async (id) => {
         if (Date.now() < getApiCooldownUntilMs) {
@@ -860,6 +905,14 @@ app.get('/dashboard', (req, res) => {
 
         if (hasSuccessfulGetApiCached(id)) {
           applyEnrichToCard(id, enrichCache.get(id));
+          return;
+        }
+
+        const p = plateById.get(id) || '';
+        if (p && !isChileanPlate(p)) {
+          const payload = { success: true, data: null, reason: 'invalid_plate_format', plate: p };
+          enrichCache.set(id, payload);
+          applyEnrichToCard(id, payload);
           return;
         }
 

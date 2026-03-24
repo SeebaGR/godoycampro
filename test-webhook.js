@@ -5,7 +5,7 @@ const API_URL = process.env.API_URL || 'http://localhost:3000';
 
 // Datos de ejemplo que simula lo que envía la cámara DAHUA
 const testData = {
-  PlateNumber: 'ABC123',
+  PlateNumber: 'ABCD12',
   VehicleType: 'Car',
   VehicleColor: 'White',
   Speed: 45.5,

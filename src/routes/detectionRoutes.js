@@ -34,6 +34,12 @@ function cleanPlateText(input) {
   return cleaned;
 }
 
+function isChileanPlate(plate) {
+  if (typeof plate !== 'string') return false;
+  const p = plate.trim().toUpperCase();
+  return /^[A-Z]{4}\d{2}$/.test(p) || /^[A-Z]{2}\d{4}$/.test(p);
+}
+
 function getGetApiKey() {
   const v =
     process.env.GETAPI_API_KEY ||
@@ -478,6 +484,10 @@ router.get('/detections/:id/enrich', async (req, res) => {
 
     if (!plate) {
       return res.json({ success: true, data: null, cached: false, reason: 'no_plate' });
+    }
+
+    if (!isChileanPlate(plate)) {
+      return res.json({ success: true, data: null, cached: false, reason: 'invalid_plate_format', plate });
     }
 
     const vehicleRes = await fetchGetApiJson(`/v1/vehicles/plate/${encodeURIComponent(plate)}`);
