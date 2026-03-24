@@ -153,14 +153,14 @@ async function listDetections({ page, limit, license_plate, start_date, end_date
 
   let payload;
   try {
-    const allFields = { ...baseQuery, fields: '*' };
-    payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: allFields });
+    payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: withFields });
   } catch (e) {
     const status = e?.status ?? null;
     const retrySpecific = status === 400 || status === 403;
     if (!retrySpecific) throw e;
     try {
-      payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: withFields });
+      const allFields = { ...baseQuery, fields: '*' };
+      payload = await directusRequest('GET', `/items/${encodeURIComponent(collection)}`, { query: allFields });
     } catch (e2) {
       const status2 = e2?.status ?? null;
       const retryWithoutFields = status2 === 400 || status2 === 403;

@@ -503,7 +503,10 @@ app.get('/dashboard', (req, res) => {
       if (!payload || typeof payload !== 'object') return false;
       const data = payload.data;
       if (!data || typeof data !== 'object') return false;
-      return typeof data.fetched_at === 'string' && Boolean(data.fetched_at);
+      if (typeof data.fetched_at === 'string' && data.fetched_at) return true;
+      if (data.vehicle && typeof data.vehicle === 'object') return true;
+      if (data.appraisal && typeof data.appraisal === 'object') return true;
+      return false;
     }
 
     function nextRetryDelayMs(attempt, payload) {
@@ -533,11 +536,17 @@ app.get('/dashboard', (req, res) => {
         if (typeof id === 'string' && id.trim()) imgUrl = id.trim();
       }
 
+      function buildAssetUrl(assetId) {
+        const u = new URL('/api/assets/' + assetId, window.location.origin);
+        u.searchParams.set('width', '640');
+        return u.toString();
+      }
+
       const match = imgUrl ? imgUrl.match(/\\/assets\\/([0-9a-fA-F-]{36})/) : null;
       if (match && match[1]) {
-        imgUrl = new URL('/api/assets/' + match[1], window.location.origin).toString();
+        imgUrl = buildAssetUrl(match[1]);
       } else if (imgUrl && /^[0-9a-fA-F-]{36}$/.test(imgUrl)) {
-        imgUrl = new URL('/api/assets/' + imgUrl, window.location.origin).toString();
+        imgUrl = buildAssetUrl(imgUrl);
       } else if (imgUrl && imgUrl.startsWith('/')) {
         imgUrl = new URL(imgUrl, window.location.origin).toString();
       }
@@ -563,7 +572,9 @@ app.get('/dashboard', (req, res) => {
         if (item && item.getapi) {
           fromField = typeof item.getapi === 'string' ? safeJsonParse(item.getapi) : item.getapi;
         }
-        if (fromField && typeof fromField === 'object' && fromField.fetched_at) existingGetApi = fromField;
+        if (fromField && typeof fromField === 'object' && ((typeof fromField.fetched_at === 'string' && fromField.fetched_at) || fromField.vehicle || fromField.appraisal)) {
+          existingGetApi = fromField;
+        }
       }
 
       let moreInner = \`<div class="section"><div class="moreTitle">Información del Vehículo</div><div class="row"><div class="k">Estado</div><div class="v">Cargando…</div></div></div>\`;
@@ -789,7 +800,7 @@ app.get('/dashboard', (req, res) => {
       if (!item) return null;
       let ga = item.getapi || null;
       if (typeof ga === 'string') ga = safeJsonParse(ga);
-      if (ga && typeof ga === 'object' && ga.fetched_at) {
+      if (ga && typeof ga === 'object' && ((typeof ga.fetched_at === 'string' && ga.fetched_at) || ga.vehicle || ga.appraisal)) {
         return { success: true, data: ga };
       }
       return null;

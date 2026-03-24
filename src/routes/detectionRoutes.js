@@ -131,7 +131,18 @@ router.get('/assets/:id', async (req, res) => {
     const id = String(req.params.id || '').trim();
     if (!id) return res.status(400).send('id requerido');
 
-    const upstream = await fetch(`${baseUrl}/assets/${encodeURIComponent(id)}`, {
+    const sp = new URLSearchParams();
+    for (const [k, v] of Object.entries(req.query || {})) {
+      if (Array.isArray(v)) {
+        for (const x of v) sp.append(k, String(x));
+      } else if (v !== undefined && v !== null) {
+        sp.set(k, String(v));
+      }
+    }
+    const qs = sp.toString();
+    const upstreamUrl = `${baseUrl}/assets/${encodeURIComponent(id)}${qs ? `?${qs}` : ''}`;
+
+    const upstream = await fetch(upstreamUrl, {
       headers: { Authorization: `Bearer ${token}` }
     });
 
@@ -442,10 +453,19 @@ router.get('/detections/:id/enrich', async (req, res) => {
     const item = await directus.getDetectionById(id);
     if (!item) return res.status(404).json({ success: false, error: 'Detección no encontrada' });
 
+    function isGetApiData(data) {
+      if (!data || typeof data !== 'object') return false;
+      if (typeof data.fetched_at === 'string' && data.fetched_at) return true;
+      if (data.vehicle && typeof data.vehicle === 'object') return true;
+      if (data.appraisal && typeof data.appraisal === 'object') return true;
+      return false;
+    }
+
     const rawDataObj = safeJsonParse(item.raw_data) || {};
     const existing = rawDataObj?.enrichment?.getapi || null;
-    const existingField = item && item.getapi && typeof item.getapi === 'object' ? item.getapi : null;
-    const cached = existingField && existingField.fetched_at ? existingField : (existing && existing.fetched_at ? existing : null);
+    let existingField = item ? item.getapi : null;
+    if (typeof existingField === 'string') existingField = safeJsonParse(existingField);
+    const cached = isGetApiData(existingField) ? existingField : (isGetApiData(existing) ? existing : null);
     if (cached) {
       return res.json({ success: true, data: cached, cached: true });
     }
