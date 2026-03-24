@@ -49,6 +49,9 @@ function isChileanPlate(plate) {
   return /^[A-Z]{4}\d{2}$/.test(p) || /^[A-Z]{2}\d{4}$/.test(p);
 }
 
+let getApiCooldownUntilMs = 0;
+const enrichInFlight = new Set();
+
 function getGetApiKey() {
   const v =
     process.env.GETAPI_API_KEY ||
@@ -135,6 +138,70 @@ async function fetchGetApiJson(path) {
   }
   const json = await res.json().catch(() => null);
   return { ok: true, status: res.status, data: json, reason: null, message: null };
+}
+
+async function enrichAndPersistDetection({ id, plate }) {
+  const detId = String(id || '').trim();
+  if (!detId) return;
+  if (enrichInFlight.has(detId)) return;
+  const key = getGetApiKey();
+  if (!key) return;
+
+  const cleanPlate = cleanPlateText(plate) || null;
+  if (!cleanPlate) return;
+  if (!isChileanPlate(cleanPlate)) return;
+  if (Date.now() < getApiCooldownUntilMs) return;
+
+  enrichInFlight.add(detId);
+  try {
+    const vehicleRes = await fetchGetApiJson(`/v1/vehicles/plate/${encodeURIComponent(cleanPlate)}`);
+    if (!vehicleRes.ok) {
+      if (vehicleRes.reason === 'rate_limited' || vehicleRes.status === 429) {
+        getApiCooldownUntilMs = Math.max(getApiCooldownUntilMs, Date.now() + 60000);
+        return;
+      }
+      if (vehicleRes.status === 401 || vehicleRes.status === 403) return;
+      const failure = {
+        plate: cleanPlate,
+        fetched_at: new Date().toISOString(),
+        vehicle: null,
+        appraisal: null,
+        error: {
+          upstream_status: vehicleRes.status,
+          reason: vehicleRes.reason || null,
+          message: vehicleRes.message || null
+        }
+      };
+      await directus.updateDetectionById(detId, { getapi: failure });
+      return;
+    }
+
+    const vehiclePayload = vehicleRes.data;
+    const vehicleData = (vehiclePayload && typeof vehiclePayload === 'object' && vehiclePayload.data) ? vehiclePayload.data : vehiclePayload;
+    if (vehicleData?.model?.brand && !vehicleData.brand) {
+      vehicleData.brand = vehicleData.model.brand;
+    }
+
+    const appraisalRes = await fetchGetApiJson(`/v1/vehicles/appraisal/${encodeURIComponent(cleanPlate)}`);
+    if (!appraisalRes.ok && (appraisalRes.reason === 'rate_limited' || appraisalRes.status === 429)) {
+      getApiCooldownUntilMs = Math.max(getApiCooldownUntilMs, Date.now() + 60000);
+      return;
+    }
+
+    const appraisalPayload = appraisalRes.ok ? appraisalRes.data : null;
+    const appraisalData = appraisalPayload?.data || null;
+
+    const result = {
+      plate: cleanPlate,
+      fetched_at: new Date().toISOString(),
+      vehicle: vehicleData || null,
+      appraisal: appraisalData || null
+    };
+
+    await directus.updateDetectionById(detId, { getapi: result });
+  } finally {
+    enrichInFlight.delete(detId);
+  }
 }
 
 router.get('/assets/:id', async (req, res) => {
@@ -319,6 +386,9 @@ router.post('/webhook/detection', async (req, res) => {
         const inserted = await directus.createDetection(data);
         console.log('Detección guardada exitosamente:', inserted?.id);
         insertedIds.push(inserted?.id || null);
+        if (inserted?.id && data?.license_plate) {
+          enrichAndPersistDetection({ id: inserted.id, plate: data.license_plate }).catch(() => null);
+        }
         plateGate.end(gate.key, { acceptedEventMs: eventMs });
       } catch (e) {
         plateGate.end(gate.key);
@@ -393,6 +463,13 @@ router.get('/detections', async (req, res) => {
         if (idx !== -1) dataWithGetApi[idx] = { ...dataWithGetApi[idx], getapi };
       } catch {
       }
+    }
+
+    const enrichCandidates = dataWithGetApi
+      .filter((x) => x && x.id && !x.getapi && typeof x.license_plate === 'string' && isChileanPlate(x.license_plate))
+      .slice(0, 2);
+    for (const x of enrichCandidates) {
+      enrichAndPersistDetection({ id: x.id, plate: x.license_plate }).catch(() => null);
     }
 
     const payload = { success: true, data: dataWithGetApi, pagination: result.pagination, poll_after_ms: pollAfterMs };
